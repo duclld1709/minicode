@@ -175,5 +175,7 @@ def test_ctrl_c_during_tools_keeps_history_valid() -> None:
     assert tool_message.role == "tool"
     # every call has a result, so the next request in the session is still valid
     assert [r.call_id for r in tool_message.tool_results] == ["a", "b", "c"]
-    assert "ran" in tool_message.tool_results[0].content
+    first = tool_message.tool_results[0]
+    assert not first.is_error  # the call that finished keeps its real result...
+    assert "ran" in first.content and "Interrupted" not in first.content
     assert all(r.is_error for r in tool_message.tool_results[1:])

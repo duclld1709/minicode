@@ -28,6 +28,9 @@ TOOL_RULES = """\
 - Make focused changes with edit_file; use write_file only for new files or full rewrites.
 - Verify your work: run the tests or the program with run_bash after editing.
 - If a tool returns an error, read the message and adjust; do not repeat the same failing call.
+- Call independent read-only tools together in one turn; they run in parallel.
+- For a task with several steps, keep a short plan with todo_write (if available) and update it.
+- For broad read-only investigations, use delegate (if available) to keep your context small.
 - When the task is done, stop calling tools and reply with a short summary of what you changed and
   how you verified it. Do not claim something works unless you checked it."""
 

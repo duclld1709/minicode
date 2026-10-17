@@ -1,26 +1,31 @@
 """The agent loop: Observe -> Think -> Act, until the model stops asking for tools.
 
+    route the task (optional)                   (question -> read-only tools)
     while True:
         stop if a guard says so                 (steps, tokens, cost, wall time)
         response = llm.complete(history)        (think)
         if no tool calls: done                  (the model answered)
-        for each tool call:                     (act)
+        for each tool call:                     (act; consecutive reads run in parallel)
             run it if permission allows, else return a "denied" result
         append the results to history           (observe)
+        compact the history if it got too big
 
-There is no framework here on purpose: this ~150-line file *is* the agent.
+There is no framework here on purpose: this file *is* the agent.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicode.agent.context import Compactor
 from minicode.agent.guards import Guards, PermissionPolicy
 from minicode.agent.prompts import wrap_tool_output
+from minicode.agent.router import Router
 from minicode.llm.base import LLMClient
 from minicode.llm.pricing import Price, estimate_cost
 from minicode.llm.types import Message, ToolCall, ToolResult, Usage
@@ -87,6 +92,8 @@ class Agent:
         prices: dict[str, Price] | None = None,
         clock: Callable[[], float] = time.monotonic,
         compactor: Compactor | None = None,
+        router: Router | None = None,
+        max_parallel_tools: int = 8,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -99,14 +106,21 @@ class Agent:
         self.prices = prices or {}
         self.clock = clock
         self.compactor = compactor
+        self.router = router
+        self.max_parallel_tools = max_parallel_tools
         # Kept across run() calls, so a REPL session is one continuous conversation.
         self.history: list[Message] = []
+        self._tools = registry  # the toolbelt for the current run (see _choose_tools)
+        self._state: _RunState | None = None
+        self._usage_lock = threading.Lock()
 
     def run(self, task: str) -> AgentResult:
         """Work on `task` until done or stopped. Never loses history, even on Ctrl+C."""
         self.history.append(Message.user(task))
         state = _RunState(started_at=self.clock())
+        self._state = state
         try:
+            self._tools = self._choose_tools(task)
             return self._loop(state)
         except KeyboardInterrupt:
             self._close_dangling_tool_calls()
@@ -115,6 +129,25 @@ class Agent:
             # e.g. a provider/network error: keep history valid for the next run, then re-raise.
             self._close_dangling_tool_calls()
             raise
+        finally:
+            self._state = None
+
+    def add_usage(self, usage: Usage) -> None:
+        """Count tokens spent on our behalf (e.g. by a subagent) toward this run's budget."""
+        with self._usage_lock:  # subagents may report from worker threads
+            if self._state is not None:
+                self._state.usage = self._state.usage + usage
+
+    def _choose_tools(self, task: str) -> ToolRegistry:
+        """Routing: questions get read-only tools, edits get everything."""
+        if self.router is None:
+            return self.registry
+        route, usage = self.router.route(task)
+        self.add_usage(usage)
+        self.listener.on_notice(f"Route: {route.kind} ({route.reason})")
+        if route.kind == "question":
+            return self.registry.subset(lambda tool: tool.risk == "read")
+        return self.registry
 
     def _loop(self, state: _RunState) -> AgentResult:
         while True:
@@ -130,12 +163,12 @@ class Agent:
             response = self.llm.complete(
                 self.history,
                 system=self.system,
-                tools=self.registry.schemas(),
+                tools=self._tools.schemas(),
                 max_tokens=self.max_tokens,
                 on_text=self.listener.on_text,
             )
             state.steps += 1
-            state.usage = state.usage + response.usage
+            self.add_usage(response.usage)
             state.last_text = response.text
             self.history.append(Message.assistant(response))
 
@@ -143,22 +176,10 @@ class Agent:
                 truncated = response.stop_reason == "max_tokens"
                 return self._result(state, "output_truncated" if truncated else "completed")
 
-            results = self._open_tool_message()
-            for call in response.tool_calls:
-                results.append(self._execute(call))
-            self._maybe_compact(state)
+            self._execute_all(response.tool_calls, self._open_tool_message())
+            self._maybe_compact()
 
-    def _maybe_compact(self, state: _RunState) -> None:
-        if self.compactor is None:
-            return
-        compaction = self.compactor.maybe_compact(self.history, self.system)
-        if compaction.changed:
-            self.history = compaction.messages
-            state.usage = state.usage + compaction.usage  # the summary call costs money too
-            self.listener.on_notice(
-                f"Context compacted: {compaction.cleared_results} old tool result(s) cleared, "
-                f"{compaction.summarized_messages} message(s) summarized."
-            )
+    # --- acting ------------------------------------------------------------------------
 
     def _open_tool_message(self) -> list[ToolResult]:
         """Append an empty tool message and return its list, filled in as tools finish.
@@ -170,9 +191,43 @@ class Agent:
         self.history.append(message)
         return message.tool_results
 
+    def _execute_all(self, calls: list[ToolCall], results: list[ToolResult]) -> None:
+        """Run calls in order; each run of consecutive `read` calls executes in parallel.
+
+        Reads have no side effects and never need a permission prompt, so running
+        them together is safe. Anything else runs alone, in order, because it may
+        prompt the user or depend on an earlier call (edit, then run tests).
+        """
+        batch: list[ToolCall] = []
+        for call in calls:
+            tool = self._tools.get(call.name)
+            if tool is not None and tool.risk == "read":
+                batch.append(call)
+                continue
+            self._execute_parallel(batch, results)
+            batch = []
+            results.append(self._execute(call))
+        self._execute_parallel(batch, results)
+
+    def _execute_parallel(self, calls: list[ToolCall], results: list[ToolResult]) -> None:
+        if len(calls) <= 1:
+            results.extend(self._execute(call) for call in calls)
+            return
+        for call in calls:
+            self.listener.on_tool_call(call)
+        workers = min(self.max_parallel_tools, len(calls))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(self._tools.execute, call) for call in calls]
+            # Collect in the original order, one by one: if Ctrl+C arrives (or a worker
+            # re-raises it), the results collected so far are already in history.
+            for call, future in zip(calls, futures, strict=True):
+                result = future.result()
+                self.listener.on_tool_result(call, result)
+                results.append(self._as_data(call, result))
+
     def _execute(self, call: ToolCall) -> ToolResult:
         self.listener.on_tool_call(call)
-        decision = self.permission.decide(call, self.registry.get(call.name))
+        decision = self.permission.decide(call, self._tools.get(call.name))
         if not decision.allowed:
             denied = ToolResult(
                 call_id=call.id,
@@ -182,11 +237,29 @@ class Agent:
             )
             self.listener.on_tool_result(call, denied)
             return denied
-        result = self.registry.execute(call)
+        result = self._tools.execute(call)
         self.listener.on_tool_result(call, result)
+        return self._as_data(call, result)
+
+    @staticmethod
+    def _as_data(call: ToolCall, result: ToolResult) -> ToolResult:
         # What the tool returned is untrusted data (file contents, command output):
         # mark it as such before the model sees it.
         return result.model_copy(update={"content": wrap_tool_output(call.name, result.content)})
+
+    # --- housekeeping ------------------------------------------------------------------
+
+    def _maybe_compact(self) -> None:
+        if self.compactor is None:
+            return
+        compaction = self.compactor.maybe_compact(self.history, self.system)
+        if compaction.changed:
+            self.history = compaction.messages
+            self.add_usage(compaction.usage)  # the summary call costs money too
+            self.listener.on_notice(
+                f"Context compacted: {compaction.cleared_results} old tool result(s) cleared, "
+                f"{compaction.summarized_messages} message(s) summarized."
+            )
 
     def _close_dangling_tool_calls(self) -> None:
         """Give every tool call in the last assistant turn a result.
@@ -209,6 +282,8 @@ class Agent:
                 )
 
     def _cost(self, usage: Usage) -> float | None:
+        # Simplification: every token is priced at the main model's rate, including
+        # small-model side calls (routing, summaries), so this slightly overestimates.
         return estimate_cost(self.llm.model, usage, self.prices)
 
     def _result(self, state: _RunState, stop_reason: str) -> AgentResult:
