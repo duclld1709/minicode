@@ -6,7 +6,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | Milestone | Status | Marker | Contract tests (copy into your repo) | What you write yourself |
 |---|---|---|---|---|
 | **M0** Setup & first LLM call | ✅ done | `m0` | `tests/contract/test_m0_types.py`, `tests/contract/test_m0_fake_client.py` | `llm/types.py` (`ToolCall`, `ToolResult`, `Usage.__add__`, `LLMResponse`, `Message` + constructors), `llm/base.py` (`LLMClient` Protocol), `llm/fake_client.py` (`FakeLLMClient`), `config.py` (`load_settings`), `llm/pricing.py` (`estimate_cost`), `llm/openai_client.py` (`to_input_items`, `from_response`), `chat.py` (`ChatSession.send`), `cli.py` (`chat`, `chat_loop`) |
-| M1 Providers, streaming, structured output | ⏳ | `m1` | — | — |
+| **M1** Providers, streaming, structured output | ✅ done | `m1` | `tests/contract/test_m1_adapters.py`, `tests/contract/test_m1_structured.py` | `llm/anthropic_client.py` (`to_messages`, `to_tool`, `from_message`, `AnthropicClient.complete` incl. streaming), streaming branch of `OpenAIClient.complete`, `llm/structured.py` (`complete_structured`, `extract_json`, `format_validation_error`), `llm/factory.py` (anthropic branch), streaming printer in `cli.py` |
 | M2 Tool calling | ⏳ | `m2` | — | — |
 | M3 Agent loop & guards | ⏳ | `m3` | — | — |
 | M4 MCP | ⏳ | `m4` | — | — |
@@ -26,6 +26,21 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
   It already translates tool calls/results, so it is ready for M2.
 - `FakeLLMClient` handles scripted offline tests and records every call.
 - Acceptance: offline suite green (`uv run pytest`). Live smoke test: `uv run pytest --run-live -m live`.
+
+## M1 — Provider abstraction, streaming, structured output
+
+- `AnthropicClient` (Messages API). Tool results are sent inside a `user` message, and stop reasons
+  are mapped to `end_turn` / `tool_use` / `max_tokens` / `other`.
+- Both adapters stream when `on_text` is given (`responses.stream` / `messages.stream`). Otherwise they
+  make a plain `create` call. Either way the final `LLMResponse` is built by the same `from_*` function.
+- `complete_structured(llm, prompt, Model, max_retries=2)` puts the JSON Schema in the prompt, then
+  validates with pydantic. When validation fails, it sends the error back to the model and asks it to
+  fix the reply. It makes at most `1 + max_retries` calls, then raises `StructuredOutputError`.
+- To switch provider, change `MINICODE_PROVIDER` (`openai` | `anthropic`). `minicode chat` now streams.
+- Adapter contract: the constructor is `Client(model, *, api_key=None, sdk=None)`. Contract tests
+  inject an SDK stub that returns objects in the real SDK format.
+- Acceptance: the offline suite is green. Live tests (`--run-live`) passed against OpenAI. Anthropic is
+  covered offline only, because there is no key in the dev environment.
 
 ## Interface changes (vs PROJECT_SPEC §3.2)
 

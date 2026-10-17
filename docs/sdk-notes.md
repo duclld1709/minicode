@@ -21,7 +21,6 @@ resp = client.responses.create(
             "parameters": {...json schema...}, "strict": False}],
     max_output_tokens=4096,
     store=False,                             # we stay stateless and resend history
-    stream=True,                             # optional (M1): yields events
 )
 ```
 
@@ -41,8 +40,17 @@ Response (`openai/types/responses/response.py`):
   There is no `stop_reason`; we derive one.
 - `resp.usage.input_tokens` / `output_tokens` (plus `input_tokens_details.cached_tokens`,
   `output_tokens_details.reasoning_tokens`).
-- Streaming text event: `type == "response.output_text.delta"` with `.delta`.
 - `openai.omit` is the sentinel for "don't send this parameter".
+
+Streaming (used since M1; `openai/lib/streaming/responses/_responses.py`):
+```python
+with client.responses.stream(**same_kwargs_as_create) as stream:
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="")
+    final = stream.get_final_response()  # ParsedResponse, a subclass of Response
+```
+Verified live on 2026-10-17 with `gpt-6.1-sol`: text arrives in many deltas.
 
 Gotcha: with reasoning models and `store=False`, don't resend `function_call` items with the
 server `id` (`fc_...`), only `call_id`. Otherwise the API expects the matching reasoning item too.
@@ -58,8 +66,16 @@ msg = client.messages.create(
     messages=[{"role": "user", "content": "..."}],
     tools=[{"name": "read_file", "description": "...", "input_schema": {...}}],
 )
-# streaming (M1): with client.messages.stream(...) as s: for text in s.text_stream: ...
 ```
+
+Streaming (used since M1; `anthropic/lib/streaming/_messages.py`):
+```python
+with client.messages.stream(**same_kwargs_as_create) as stream:
+    for text in stream.text_stream:  # only the text deltas
+        print(text, end="")
+    final = stream.get_final_message()  # ParsedMessage, a subclass of Message
+```
+Not yet verified live (no Anthropic key in this environment). Covered by stub-based contract tests.
 
 - `msg.content`: list of blocks, `type == "text"` (`.text`) or `type == "tool_use"` (`.id`, `.name`,
   `.input` as a **dict** that is already parsed).
