@@ -81,6 +81,14 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def subset(self, keep: Callable[[Tool], bool]) -> ToolRegistry:
+        """A new registry with only the tools for which `keep(tool)` is true (same limits)."""
+        registry = ToolRegistry(self.max_output_lines, self.max_output_chars)
+        for tool in self._tools.values():
+            if keep(tool):
+                registry.register(tool)
+        return registry
+
     def schemas(self) -> list[dict[str, Any]]:
         """Provider-neutral schemas: {name, description, input_schema}. Adapters convert them."""
         return [

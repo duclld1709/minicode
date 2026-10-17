@@ -77,27 +77,31 @@ class ShellTool:
         return Tool("run_bash", RUN_BASH_DOC, RunBashArgs, self.run_bash, "exec")
 
     def run_bash(self, args: RunBashArgs) -> str:
+        exit_code, output = self.run(args.command, args.timeout_seconds)
+        return f"{output or '(no output)'}\n[exit code: {exit_code}]"
+
+    def run(self, command: str, timeout_seconds: float) -> tuple[int, str]:
+        """Run `command` and return (exit code, combined output). Also used by --verify."""
         if self.bash is None:
             raise ToolError("bash was not found on this machine. Set MINICODE_BASH to its path.")
         try:
             completed = subprocess.run(
-                [self.bash, "-c", args.command],
+                [self.bash, "-c", command],
                 cwd=self.root,
                 env=self.env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # one stream keeps errors next to their context
-                timeout=args.timeout_seconds,
+                timeout=timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             partial = _decode(exc.output)
             raise ToolError(
-                f"Command timed out after {args.timeout_seconds}s and was killed. "
+                f"Command timed out after {timeout_seconds}s and was killed. "
                 f"Partial output:\n{partial}"
             ) from exc
-        output = _decode(completed.stdout).rstrip() or "(no output)"
-        return f"{output}\n[exit code: {completed.returncode}]"
+        return completed.returncode, _decode(completed.stdout).rstrip()
 
 
 def _decode(data: bytes | str | None) -> str:
