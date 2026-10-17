@@ -1,0 +1,27 @@
+# Secrets — never commit real keys
+.env
+.env.*
+!.env.example
+
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# minicode runtime output
+.minicode/traces/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

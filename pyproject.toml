@@ -1,0 +1,63 @@
+[project]
+name = "minicode"
+version = "0.1.0"
+description = "A mini coding agent (Claude Code-style) built from scratch in Python, as a learning reference."
+readme = "README.md"
+authors = [
+    { name = "DucLLD1709", email = "lailedinhduc@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    # LLM SDKs are pinned exactly: their wire formats are what our adapters translate.
+    "anthropic==1.15.0",
+    "openai==3.33.0",
+    "pydantic>=2.11,<3",
+    "typer>=0.16",
+    "rich>=14",
+    "python-dotenv>=1.1",
+]
+
+[project.scripts]
+minicode = "minicode.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=6.2",
+    "ruff>=0.12",
+    "mypy>=1.17",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "m0: M0 - setup & first LLM call",
+    "m1: M1 - provider abstraction, streaming, structured output",
+    "m2: M2 - tool calling",
+    "m3: M3 - agent loop & guards",
+    "m4: M4 - MCP",
+    "m5: M5 - harness / context engineering",
+    "m6: M6 - workflow patterns",
+    "m7: M7 - observability & evals",
+    "m8: M8 - polish",
+    "live: calls a real provider API; runs only with --run-live and a configured key",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src"]
