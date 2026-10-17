@@ -43,7 +43,7 @@ def test_run_loads_mcp_tools_from_config(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(cli, "create_client", fake_create_client)
 
     result = CliRunner().invoke(
-        cli.app, ["run", "read it", "--cwd", str(workspace), "--mode", "auto"]
+        cli.app, ["run", "read it", "--cwd", str(workspace), "--mode", "auto", "--no-route"]
     )
 
     assert result.exit_code == 0, result.output

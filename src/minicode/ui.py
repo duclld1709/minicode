@@ -51,6 +51,7 @@ class RichListener:
     def __init__(self, console: Console) -> None:
         self.console = console
         self._mid_line = False
+        self._last_call_id: str | None = None
 
     def on_text(self, chunk: str) -> None:
         self.console.print(Text(chunk), end="")
@@ -63,8 +64,13 @@ class RichListener:
                 ("> ", "bold cyan"), (call.name, "bold cyan"), f"({short_args(call.arguments)})"
             )
         )
+        self._last_call_id = call.id
 
     def on_tool_result(self, call: ToolCall, result: ToolResult) -> None:
+        if call.id != self._last_call_id:
+            # Parallel calls print all calls first, then all results: say whose result this is.
+            self.console.print(Text(f"  < {call.name}", style="cyan"))
+        self._last_call_id = None
         style = "red" if result.is_error else "dim"
         indented = "\n".join(f"  {line}" for line in preview(result.content).splitlines())
         self.console.print(Text(indented, style=style))
