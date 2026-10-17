@@ -69,6 +69,10 @@ class RichListener:
         indented = "\n".join(f"  {line}" for line in preview(result.content).splitlines())
         self.console.print(Text(indented, style=style))
 
+    def on_notice(self, message: str) -> None:
+        self.end_line()
+        self.console.print(Text(f"[{message}]", style="magenta"))
+
     def end_line(self) -> None:
         if self._mid_line:
             self.console.print()

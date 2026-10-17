@@ -20,11 +20,14 @@ import typer
 from rich.console import Console
 from rich.text import Text
 
+from minicode.agent.context import Compactor
 from minicode.agent.guards import Guards, PermissionPolicy
 from minicode.agent.loop import Agent, AgentResult
-from minicode.agent.prompts import build_system_prompt
+from minicode.agent.prompts import PromptContext, build_system_prompt, read_git_status
 from minicode.chat import ChatSession
 from minicode.config import ConfigError, Settings, load_settings
+from minicode.harness.memory import load_project_memory
+from minicode.harness.skills import discover_skills, make_skill_tool
 from minicode.llm.factory import create_client
 from minicode.llm.types import Usage
 from minicode.mcp.client import McpManager, load_mcp_config
@@ -134,6 +137,7 @@ def build_agent(
     """Wire the real dependencies together. Tests build Agents directly instead."""
     try:
         llm = create_client(settings)
+        small_llm = create_client(settings, small=True)
     except ConfigError as exc:
         _print_error(console, "Config error", exc)
         raise typer.Exit(code=2) from exc
@@ -141,18 +145,29 @@ def build_agent(
         mode=mode.value,
         prompt=make_permission_prompt(console, read_answer=lambda: console.input("")),
     )
+    skills = discover_skills(cwd)
     registry = build_registry(cwd, environ=os.environ)
+    if skills:
+        registry.register(make_skill_tool(skills))
     for tool in extra_tools or []:
         registry.register(tool)
+    context = PromptContext(
+        workspace=cwd,
+        today=date.today(),
+        git_status=read_git_status(cwd),
+        project_memory=load_project_memory(cwd),
+        skills=skills,
+    )
     return Agent(
         llm,
         registry,
         Guards(max_steps=max_steps, max_cost_usd=max_cost),
         permission=permission,
-        system=build_system_prompt(cwd, today=date.today()),
+        system=build_system_prompt(context),
         listener=RichListener(console),
         max_tokens=settings.max_tokens,
         prices=settings.pricing,
+        compactor=Compactor(small_llm, threshold_tokens=settings.compact_at_tokens),
     )
 
 

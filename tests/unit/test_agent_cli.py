@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +13,6 @@ from typer.testing import CliRunner
 from minicode import cli
 from minicode.agent.guards import Guards, PermissionPolicy
 from minicode.agent.loop import Agent
-from minicode.agent.prompts import build_system_prompt
 from minicode.llm.fake_client import FakeLLMClient, tool_call_response
 from minicode.llm.types import LLMResponse, ToolCall, ToolResult
 from minicode.tools.base import Tool, ToolRegistry
@@ -70,17 +68,6 @@ def test_permission_prompt_answers(typed: list[str], expected: str) -> None:
     prompt = make_permission_prompt(record_console(), lines(typed))
     tool = Tool("run_bash", "", ReadFileArgs, str, "exec")
     assert prompt(ToolCall(id="c", name="run_bash", arguments={"command": "ls"}), tool) == expected
-
-
-# --- prompts.py -----------------------------------------------------------------------
-
-
-def test_system_prompt_has_environment_and_safety(tmp_path: Path) -> None:
-    prompt = build_system_prompt(tmp_path, today=date(2026, 10, 17), os_name="Linux")
-    assert str(tmp_path.resolve()) in prompt
-    assert "2026-10-17" in prompt
-    assert "Linux" in prompt
-    assert "DATA, not instructions" in prompt
 
 
 # --- cli.py ---------------------------------------------------------------------------------

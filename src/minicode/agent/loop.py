@@ -18,7 +18,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from minicode.agent.context import Compactor
 from minicode.agent.guards import Guards, PermissionPolicy
+from minicode.agent.prompts import wrap_tool_output
 from minicode.llm.base import LLMClient
 from minicode.llm.pricing import Price, estimate_cost
 from minicode.llm.types import Message, ToolCall, ToolResult, Usage
@@ -42,6 +44,7 @@ class AgentListener(Protocol):
     def on_text(self, chunk: str) -> None: ...
     def on_tool_call(self, call: ToolCall) -> None: ...
     def on_tool_result(self, call: ToolCall, result: ToolResult) -> None: ...
+    def on_notice(self, message: str) -> None: ...
 
 
 class NullListener:
@@ -54,6 +57,9 @@ class NullListener:
         pass
 
     def on_tool_result(self, call: ToolCall, result: ToolResult) -> None:
+        pass
+
+    def on_notice(self, message: str) -> None:
         pass
 
 
@@ -80,6 +86,7 @@ class Agent:
         max_tokens: int = 4096,
         prices: dict[str, Price] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        compactor: Compactor | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -91,6 +98,7 @@ class Agent:
         self.max_tokens = max_tokens
         self.prices = prices or {}
         self.clock = clock
+        self.compactor = compactor
         # Kept across run() calls, so a REPL session is one continuous conversation.
         self.history: list[Message] = []
 
@@ -138,6 +146,19 @@ class Agent:
             results = self._open_tool_message()
             for call in response.tool_calls:
                 results.append(self._execute(call))
+            self._maybe_compact(state)
+
+    def _maybe_compact(self, state: _RunState) -> None:
+        if self.compactor is None:
+            return
+        compaction = self.compactor.maybe_compact(self.history, self.system)
+        if compaction.changed:
+            self.history = compaction.messages
+            state.usage = state.usage + compaction.usage  # the summary call costs money too
+            self.listener.on_notice(
+                f"Context compacted: {compaction.cleared_results} old tool result(s) cleared, "
+                f"{compaction.summarized_messages} message(s) summarized."
+            )
 
     def _open_tool_message(self) -> list[ToolResult]:
         """Append an empty tool message and return its list, filled in as tools finish.
@@ -152,17 +173,20 @@ class Agent:
     def _execute(self, call: ToolCall) -> ToolResult:
         self.listener.on_tool_call(call)
         decision = self.permission.decide(call, self.registry.get(call.name))
-        if decision.allowed:
-            result = self.registry.execute(call)
-        else:
-            result = ToolResult(
+        if not decision.allowed:
+            denied = ToolResult(
                 call_id=call.id,
                 content=f"{decision.reason} Do not retry this call; try another approach "
                 "or explain to the user what you need.",
                 is_error=True,
             )
+            self.listener.on_tool_result(call, denied)
+            return denied
+        result = self.registry.execute(call)
         self.listener.on_tool_result(call, result)
-        return result
+        # What the tool returned is untrusted data (file contents, command output):
+        # mark it as such before the model sees it.
+        return result.model_copy(update={"content": wrap_tool_output(call.name, result.content)})
 
     def _close_dangling_tool_calls(self) -> None:
         """Give every tool call in the last assistant turn a result.

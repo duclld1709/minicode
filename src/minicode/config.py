@@ -46,6 +46,8 @@ class Settings(BaseModel):
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     max_tokens: int = 4096
+    # Estimated history size (tokens) at which context compaction kicks in.
+    compact_at_tokens: int = 100_000
     pricing: dict[str, Price] = Field(default_factory=lambda: dict(DEFAULT_PRICES))
 
     @property

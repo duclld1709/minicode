@@ -61,7 +61,8 @@ def test_tool_results_are_fed_back_to_the_model() -> None:
     assert result.steps == 2
     sent = llm.calls[1].messages
     assert [m.role for m in sent] == ["user", "assistant", "tool"]
-    assert sent[-1].tool_results[0].content == "echo:hi"
+    # `in`, not `==`: from M5 on, results are wrapped in <tool_output> tags.
+    assert "echo:hi" in sent[-1].tool_results[0].content
     assert llm.calls[0].tools[0]["name"] == "echo"  # tool schemas are sent
 
 
@@ -70,11 +71,9 @@ def test_multiple_calls_in_one_turn_keep_their_order() -> None:
     agent, llm = make_agent([tool_call_response(calls), "ok"])
     agent.run("go")
     results = llm.calls[1].messages[-1].tool_results
-    assert [(r.call_id, r.content) for r in results] == [
-        ("a", "echo:1"),
-        ("b", "echo:2"),
-        ("c", "echo:3"),
-    ]
+    assert [r.call_id for r in results] == ["a", "b", "c"]
+    for result, expected in zip(results, ["echo:1", "echo:2", "echo:3"], strict=True):
+        assert expected in result.content
 
 
 def test_usage_is_summed_over_steps() -> None:
@@ -176,5 +175,5 @@ def test_ctrl_c_during_tools_keeps_history_valid() -> None:
     assert tool_message.role == "tool"
     # every call has a result, so the next request in the session is still valid
     assert [r.call_id for r in tool_message.tool_results] == ["a", "b", "c"]
-    assert tool_message.tool_results[0].content == "ran"
+    assert "ran" in tool_message.tool_results[0].content
     assert all(r.is_error for r in tool_message.tool_results[1:])
