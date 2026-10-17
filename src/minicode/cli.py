@@ -14,7 +14,6 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.markdown import Markdown
 
 from minicode.chat import ChatSession
 from minicode.config import ConfigError, Settings, load_settings
@@ -68,19 +67,32 @@ def chat_loop(session: ChatSession, console: Console, read_line: Callable[[], st
         if text in EXIT_COMMANDS:
             break
         try:
-            response = session.send(text)
+            response = session.send(text, on_text=_stream_printer(console))
         except KeyboardInterrupt:
-            console.print("[yellow]Interrupted.[/]")
+            console.print("\n[yellow]Interrupted.[/]")
             continue
         except Exception as exc:  # show a short message, keep the session alive
-            console.print(f"[red]Error:[/] {short_error(exc)}")
+            console.print(f"\n[red]Error:[/] {short_error(exc)}")
             continue
-        console.print(Markdown(response.text))
+        console.print()  # end the streamed line
         console.print(
             format_usage(response.usage, session.cost_of(response.usage), session.total_cost),
             style="dim",
         )
     console.print("[dim]Bye.[/]")
+
+
+def _stream_printer(console: Console) -> Callable[[str], None]:
+    """Print text chunks as they arrive, verbatim.
+
+    Streamed text is printed raw (no Markdown rendering): Markdown can only be
+    rendered once the whole reply is known, and seeing tokens arrive is the point.
+    """
+
+    def print_chunk(chunk: str) -> None:
+        console.print(chunk, end="", markup=False, highlight=False)
+
+    return print_chunk
 
 
 def format_usage(usage: Usage, cost: float | None, session_cost: float | None) -> str:

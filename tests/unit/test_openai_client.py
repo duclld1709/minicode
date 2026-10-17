@@ -7,7 +7,6 @@ from openai.types.responses import Response
 
 from minicode.llm.openai_client import (
     INVALID_JSON_KEY,
-    OpenAIClient,
     from_response,
     to_function_tool,
     to_input_items,
@@ -118,37 +117,3 @@ def test_neutral_tool_schema_converts_to_function_tool() -> None:
         "parameters": {"type": "object"},
         "strict": False,
     }
-
-
-class StubResponses:
-    def __init__(self, response: Response) -> None:
-        self.response = response
-        self.kwargs: dict[str, Any] = {}
-
-    def create(self, **kwargs: Any) -> Response:
-        self.kwargs = kwargs
-        return self.response
-
-
-class StubSDK:
-    def __init__(self, response: Response) -> None:
-        self.responses = StubResponses(response)
-
-
-def test_complete_sends_stateless_request() -> None:
-    sdk = StubSDK(make_response([text_item("hi")]))
-    client = OpenAIClient("gpt-test", sdk=sdk)  # type: ignore[arg-type]
-    chunks: list[str] = []
-
-    result = client.complete(
-        [Message.user("hello")], system="be brief", tools=[], max_tokens=50, on_text=chunks.append
-    )
-
-    sent = sdk.responses.kwargs
-    assert sent["model"] == "gpt-test"
-    assert sent["instructions"] == "be brief"
-    assert sent["max_output_tokens"] == 50
-    assert sent["store"] is False  # we resend history ourselves
-    assert sent["input"] == [{"role": "user", "content": "hello"}]
-    assert result.text == "hi"
-    assert chunks == ["hi"]

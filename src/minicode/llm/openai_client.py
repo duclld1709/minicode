@@ -58,19 +58,23 @@ class OpenAIClient:
         max_tokens: int,
         on_text: TextCallback | None = None,
     ) -> LLMResponse:
-        response = self._sdk.responses.create(
-            model=self.model,
-            instructions=system,
-            input=to_input_items(messages),
-            tools=[to_function_tool(t) for t in tools] if tools else openai.omit,
-            max_output_tokens=max_tokens,
-            store=False,
-        )
-        result = from_response(response)
-        # Non-streaming for now (streaming arrives in M1): deliver the text in one piece.
-        if on_text is not None and result.text:
-            on_text(result.text)
-        return result
+        request: dict[str, Any] = {
+            "model": self.model,
+            "instructions": system,
+            "input": to_input_items(messages),
+            "tools": [to_function_tool(t) for t in tools] if tools else openai.omit,
+            "max_output_tokens": max_tokens,
+            "store": False,
+        }
+        if on_text is None:
+            return from_response(self._sdk.responses.create(**request))
+        # Streaming: the API sends many small events; we only care about text deltas.
+        # The final, fully assembled Response is the same shape as the non-streaming one.
+        with self._sdk.responses.stream(**request) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    on_text(event.delta)
+            return from_response(stream.get_final_response())
 
 
 def to_input_items(messages: list[Message]) -> list[ResponseInputItemParam]:
