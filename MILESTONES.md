@@ -9,7 +9,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M1** Providers, streaming, structured output | ✅ done | `m1` | `tests/contract/test_m1_adapters.py`, `tests/contract/test_m1_structured.py` | `llm/anthropic_client.py` (`to_messages`, `to_tool`, `from_message`, `AnthropicClient.complete` incl. streaming), streaming branch of `OpenAIClient.complete`, `llm/structured.py` (`complete_structured`, `extract_json`, `format_validation_error`), `llm/factory.py` (anthropic branch), streaming printer in `cli.py` |
 | **M2** Tool calling | ✅ done | `m2` | `tests/contract/test_m2_registry.py`, `tests/contract/test_m2_fs_tools.py`, `tests/contract/test_m2_shell.py` | `tools/base.py` (`Tool`, `ToolRegistry.register/schemas/execute`, `ToolError`, `truncate_output`), `tools/fs.py` (`resolve_in_workspace`, `FileTools.read_file/list_dir/glob/grep/write_file/edit_file`), `tools/shell.py` (`find_bash`, `scrubbed_env`, `ShellTool.run_bash`), `tools/toolbelt.py` (`build_registry`) |
 | **M3** Agent loop & guards | ✅ done | `m3` | `tests/contract/test_m3_agent.py`, `tests/contract/test_m3_permissions.py`, `tests/contract/test_m3_guards.py` | `agent/loop.py` (`Agent.run`, `_loop`, `_execute`, `_close_dangling_tool_calls`, `AgentResult`, `AgentListener`), `agent/guards.py` (`Guards.check`, `dangerous_command_reason`, `PermissionPolicy.decide`), `agent/prompts.py` (`build_system_prompt`), `ui.py` (`RichListener`, `make_permission_prompt`), `cli.py` (`run`, REPL `agent_repl`, `build_agent`) |
-| M4 MCP | ⏳ | `m4` | — | — |
+| **M4** MCP | ✅ done | `m4` | `tests/contract/test_m4_mcp.py` | `mcp/server.py` (`build_server_registry`, `create_mcp_server`, `serve_stdio`), `mcp/client.py` (`load_mcp_config`, `McpConnection` start/list_tools/call_tool/close, `tool_name`, `result_text`, `tools_from_connection`, `McpManager`), `Tool.input_schema` + `Tool.schema()`, `cli.py` (`mcp-serve`, `mcp_tools`) |
 | M5 Harness / context engineering | ⏳ | `m5` | — | — |
 | M6 Workflow patterns | ⏳ | `m6` | — | — |
 | M7 Observability & evals | ⏳ | `m7` | — | — |
@@ -94,6 +94,24 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
   ($0.04, 2026-10-17): explore → pytest → 3× `edit_file` → pytest (9 passed) → summary.
   Every stopping condition and guard has an offline test.
 
+## M4 — MCP
+
+- `minicode mcp-serve [--cwd] [--allow-write]` serves the filesystem tools over stdio. It is read-only
+  by default and never exposes `run_bash`. It wraps the same `ToolRegistry`, so schemas, the sandbox
+  and error messages are identical to what the agent sees. Inspector:
+  `npx @modelcontextprotocol/inspector uv run minicode mcp-serve --cwd .`
+- `.minicode/mcp.json` (`{"mcpServers": {name: {command, args, env, cwd}}}`) is loaded by `run` and the
+  REPL. Each tool becomes `mcp__<server>__<tool>` with risk `exec`. A server that fails to start is
+  reported as a warning and skipped.
+- Sync/async bridge: each `McpConnection` runs `asyncio.run(...)` in a daemon thread and holds the
+  `Client` session open. Handlers submit coroutines with `run_coroutine_threadsafe(...).result(timeout)`.
+- `python -m minicode` works (`__main__.py`). Tests use it to start our server as a subprocess.
+- Acceptance: the integration tests run `python -m minicode mcp-serve` as a real subprocess and call
+  its tools through the client: list, call, errors, sandbox, `--allow-write`, agent + permission prompt,
+  and a broken server. One more test covers the CLI path through `.minicode/mcp.json`.
+- Startup fix: provider SDKs are imported lazily in `llm/factory.py`. CLI startup went from 11s to 2s
+  on Windows.
+
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
 All are **additions**. Nothing in the spec signature was removed or renamed.
@@ -110,6 +128,7 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
 | `INVALID_JSON_KEY` (M2) | moved from `llm/openai_client.py` to `llm/types.py` | the tool layer must not import from a specific adapter |
 | `Agent.__init__` (M3) | keyword-only `permission`, `system`, `listener`, `max_tokens`, `prices`, `clock` after the spec's `(llm, registry, guards)` | dependency injection: tests pass a fake clock, a scripted permission prompt and a null listener |
 | `AgentResult` (M3) | added `cost: float \| None` | budget and summary display |
+| `Tool` (M4) | added optional `input_schema: dict \| None = None` and `schema()` | MCP tools arrive as JSON Schema, not pydantic models. They use a permissive `input_model` (`AnyArguments`) and let the server validate |
 
 ## Deviations from the spec
 

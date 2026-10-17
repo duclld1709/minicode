@@ -56,6 +56,7 @@ uv sync                                   # install
 uv run minicode chat                      # M0: multi-turn chat
 uv run minicode run "task" --cwd DIR      # M3: one-shot agent (--mode ask|accept-edits|auto)
 uv run minicode --cwd DIR                 # M3: agent REPL
+uv run minicode mcp-serve --cwd DIR       # M4: MCP server over stdio (--allow-write for edits)
 # Run the buggy_calculator demo on a COPY (or git checkout it afterwards).
 uv run pytest -m m0                       # one milestone's tests
 uv run pytest --run-live -m live          # real API smoke tests

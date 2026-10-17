@@ -7,7 +7,7 @@ packages under `.venv/Lib/site-packages/`, not from memory. Re-verify when bumpi
 |-------------|---------|--------|-----------|
 | `openai`    | 3.33.0  | ≥3.10  | M0        |
 | `anthropic` | 1.15.0  | ≥3.10  | M1        |
-| `mcp`       | 2.3.0   | ≥3.10  | M4 (not yet a dependency) |
+| `mcp`       | 2.3.0   | ≥3.10  | M4        |
 
 ## OpenAI — Responses API (`openai/resources/responses/responses.py`)
 
@@ -116,5 +116,42 @@ async with Client(StdioServerParameters(command="uv", args=["run", "minicode", "
     # CallToolResult: .content (list of blocks), .structured_content, .is_error
 ```
 
-`Client(...)` also accepts an `MCPServer` instance for in-process tests. Our `Tool.handler` is sync,
-so M4 needs a small bridge (a background event loop thread) to call the async client.
+`Client(...)` also accepts an `MCPServer` or low-level `Server` instance for in-process tests.
+
+### What minicode actually uses (M4, verified 2026-10-17)
+
+Low-level server (`mcp/server/lowlevel/server.py`). We use it because our tools already have JSON
+schemas:
+```python
+from mcp import types
+from mcp.server.lowlevel import Server
+from mcp.server.stdio import stdio_server
+
+
+async def list_tools(ctx, params) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=[types.Tool(name=..., description=..., input_schema={...})])
+
+
+async def call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+    return types.CallToolResult(content=[types.TextContent(text="...")], is_error=False)
+
+
+server = Server("minicode", on_list_tools=list_tools, on_call_tool=call_tool)
+
+
+async def main():
+    async with stdio_server() as (read, write):  # fd 1 is redirected to stderr while serving
+        await server.run(read, write, server.create_initialization_options())
+```
+
+- `mcp.types` re-exports the `mcp_types` package. Its models use snake_case attributes with camelCase
+  aliases (`input_schema` ↔ `inputSchema`, `is_error` ↔ `isError`).
+- `StdioServerParameters(command, args, env, cwd)`. The child inherits **only** a whitelist of
+  variables (`PATH`, `HOME`/`USERPROFILE`, `TEMP`, ...; see `DEFAULT_INHERITED_ENV_VARS` in
+  `mcp/client/stdio.py`) plus the explicit `env`. API keys do not leak to MCP servers by default.
+- `Client` must be entered and exited in the same asyncio task. minicode keeps one task per
+  connection, alive in a background thread (`minicode/mcp/client.py`).
+- If the server process exits during startup, `async with Client(...)` raises. The event loop of
+  our background thread is then already closed when `close()` runs, so `close()` must tolerate that.
+- Importing `anthropic` takes ~7s on this Windows machine (`python -X importtime`). The adapters are
+  therefore imported lazily in `llm/factory.py`, so `mcp-serve` starts in about 2s.
