@@ -52,7 +52,8 @@ server `id` (`fc_...`), only `call_id`. Otherwise the API expects the matching r
 ```python
 client = anthropic.Anthropic(api_key=...)
 msg = client.messages.create(
-    model="...", max_tokens=4096,            # max_tokens is required
+    model="...",
+    max_tokens=4096,  # max_tokens is required
     system="system prompt",
     messages=[{"role": "user", "content": "..."}],
     tools=[{"name": "read_file", "description": "...", "input_schema": {...}}],
@@ -76,19 +77,25 @@ v2 renamed the high-level APIs. `FastMCP` became `MCPServer`, and there is a new
 Server:
 ```python
 from mcp.server import MCPServer
+
 server = MCPServer("minicode")
-@server.tool()                      # schema inferred from type hints + docstring
+
+
+@server.tool()  # schema inferred from type hints + docstring
 def read_file(path: str) -> str: ...
-server.add_tool(fn, name=..., description=...)   # programmatic registration
-server.run()                         # transport="stdio" by default (sync call)
+
+
+server.add_tool(fn, name=..., description=...)  # programmatic registration
+server.run()  # transport="stdio" by default (sync call)
 ```
 
 Client (async only):
 ```python
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
+
 async with Client(StdioServerParameters(command="uv", args=["run", "minicode", "mcp-serve"])) as c:
-    tools = await c.list_tools()                     # ListToolsResult(.tools)
+    tools = await c.list_tools()  # ListToolsResult(.tools)
     result = await c.call_tool("read_file", {"path": "a.py"})
     # CallToolResult: .content (list of blocks), .structured_content, .is_error
 ```
