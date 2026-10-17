@@ -9,7 +9,8 @@ terminal or network. Rendering lives in `ui.py`.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -26,6 +27,9 @@ from minicode.chat import ChatSession
 from minicode.config import ConfigError, Settings, load_settings
 from minicode.llm.factory import create_client
 from minicode.llm.types import Usage
+from minicode.mcp.client import McpManager, load_mcp_config
+from minicode.mcp.server import serve_stdio
+from minicode.tools.base import Tool
 from minicode.tools.toolbelt import build_registry
 from minicode.ui import RichListener, format_summary, make_permission_prompt
 
@@ -67,11 +71,11 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
     console = Console()
-    agent = build_agent(
-        _load_settings_or_exit(cwd, console), cwd, console, mode, max_steps, max_cost
-    )
-    console.print(f"[dim]minicode | {agent.llm.model} | mode {mode.value} | /exit to quit[/]")
-    agent_repl(agent, console, read_line=lambda: console.input("[bold green]task>[/] "))
+    settings = _load_settings_or_exit(cwd, console)
+    with mcp_tools(cwd, console) as extra_tools:
+        agent = build_agent(settings, cwd, console, mode, max_steps, max_cost, extra_tools)
+        console.print(f"[dim]minicode | {agent.llm.model} | mode {mode.value} | /exit to quit[/]")
+        agent_repl(agent, console, read_line=lambda: console.input("[bold green]task>[/] "))
 
 
 @app.command()
@@ -84,11 +88,38 @@ def run(
 ) -> None:
     """Run one task to completion, then exit (code 0 only if it completed)."""
     console = Console()
-    agent = build_agent(
-        _load_settings_or_exit(cwd, console), cwd, console, mode, max_steps, max_cost
-    )
-    result = run_task(agent, task, console)
+    settings = _load_settings_or_exit(cwd, console)
+    with mcp_tools(cwd, console) as extra_tools:
+        agent = build_agent(settings, cwd, console, mode, max_steps, max_cost, extra_tools)
+        result = run_task(agent, task, console)
     raise typer.Exit(code=0 if result is not None and result.stop_reason == "completed" else 1)
+
+
+@app.command("mcp-serve")
+def mcp_serve(
+    cwd: CwdOption = Path("."),
+    allow_write: Annotated[
+        bool, typer.Option("--allow-write", help="Also expose write_file and edit_file.")
+    ] = False,
+) -> None:
+    """Serve minicode's filesystem tools over MCP (stdio). Read-only unless --allow-write."""
+    serve_stdio(cwd, allow_write=allow_write)
+
+
+@contextmanager
+def mcp_tools(cwd: Path, console: Console) -> Iterator[list[Tool]]:
+    """Start the MCP servers from `.minicode/mcp.json` for the duration of the block."""
+    try:
+        configs = load_mcp_config(cwd)
+    except ConfigError as exc:
+        _print_error(console, "Config error", exc)
+        raise typer.Exit(code=2) from exc
+    with McpManager(configs) as manager:
+        for error in manager.errors:
+            console.print(Text(f"Warning: {error}", style="yellow"))
+        if manager.tools:
+            console.print(f"[dim]Loaded {len(manager.tools)} MCP tool(s).[/]")
+        yield manager.tools
 
 
 def build_agent(
@@ -98,6 +129,7 @@ def build_agent(
     mode: Mode,
     max_steps: int,
     max_cost: float | None,
+    extra_tools: list[Tool] | None = None,
 ) -> Agent:
     """Wire the real dependencies together. Tests build Agents directly instead."""
     try:
@@ -109,9 +141,12 @@ def build_agent(
         mode=mode.value,
         prompt=make_permission_prompt(console, read_answer=lambda: console.input("")),
     )
+    registry = build_registry(cwd, environ=os.environ)
+    for tool in extra_tools or []:
+        registry.register(tool)
     return Agent(
         llm,
-        build_registry(cwd, environ=os.environ),
+        registry,
         Guards(max_steps=max_steps, max_cost_usd=max_cost),
         permission=permission,
         system=build_system_prompt(cwd, today=date.today()),
