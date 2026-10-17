@@ -25,14 +25,7 @@ from openai.types.responses import (
 )
 
 from minicode.llm.base import TextCallback
-from minicode.llm.types import LLMResponse, Message, ToolCall, Usage
-
-INVALID_JSON_KEY = "__invalid_json__"
-"""Set in ToolCall.arguments when the model emitted arguments that are not valid JSON.
-
-We keep the raw string instead of raising so the tool layer can return a helpful
-error to the model (M2) rather than crashing the agent.
-"""
+from minicode.llm.types import INVALID_JSON_KEY, LLMResponse, Message, ToolCall, Usage
 
 
 class OpenAIClient:

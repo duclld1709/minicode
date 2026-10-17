@@ -11,6 +11,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+INVALID_JSON_KEY = "__invalid_json__"
+"""Set in ToolCall.arguments when the model emitted arguments that are not valid JSON.
+
+Adapters keep the raw string under this key instead of raising, so the tool
+registry can return a helpful error to the model rather than crashing the agent.
+"""
+
 
 class ToolCall(BaseModel):
     """A tool invocation *proposed* by the model. Our code decides whether to run it."""
