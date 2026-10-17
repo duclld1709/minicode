@@ -1,0 +1,5 @@
+# Store and check out text files with LF everywhere, so fixtures, tests and CI see the
+# same bytes on Linux and Windows (edit_file and the eval checks compare exact content).
+* text=auto eol=lf
+*.png binary
+*.gif binary

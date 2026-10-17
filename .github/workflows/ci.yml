@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint, types, tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the primary target; Windows is best-effort (and where minicode is developed).
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash  # Git Bash on Windows, so run_bash tests have a bash too
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy src
+
+      - name: Tests (offline only; live tests need --run-live and keys)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          uv run pytest -q --cov=minicode --cov-report=term
