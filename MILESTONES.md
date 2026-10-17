@@ -13,7 +13,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M5** Harness / context engineering | ✅ done | `m5` | `tests/contract/test_m5_harness.py`, `tests/contract/test_m5_compaction.py`, `tests/contract/test_m5_prompt_injection.py` | `agent/prompts.py` (`PromptContext`, `build_system_prompt` + section functions, `read_git_status`, `wrap_tool_output`), `harness/memory.py` (`load_project_memory`), `harness/skills.py` (`parse_skill_file`, `discover_skills`, `make_skill_tool`), `agent/context.py` (`estimate_tokens`, `Compactor.maybe_compact`/`split_index`, `clear_old_tool_results`, `summary_message`, `render_transcript`), compaction + wrapping hooks in `Agent` |
 | **M6** Workflow patterns | ✅ done | `m6` | `tests/contract/test_m6_chaining_routing.py`, `tests/contract/test_m6_parallel.py`, `tests/contract/test_m6_subagent_verifier.py`, `tests/contract/test_m6_todo.py` | `workflows/commit_msg.py` (`read_diff`, `write_commit_message`), `agent/router.py` (`TaskRoute`, `Router.route`), `llm/metered.py` (`MeteredLLM`), parallel reads in `Agent._execute_all`/`_execute_parallel`, `Agent.add_usage`, `ToolRegistry.subset`, `workflows/subagent.py` (`DelegateTool`), `workflows/verifier.py` (`run_with_verification`), `tools/todo.py` (`TodoList`), `ShellTool.run` |
 | **M7** Observability & evals | ✅ done | `m7` | `tests/contract/test_m7_tracing.py`, `tests/contract/test_m7_evals.py` | `tracing.py` (`mask_secrets`, `Tracer`, `TracedLLM`, `TraceListener`, `FanoutListener`, `load_trace`, `latest_trace`), `ui.py` (`render_trace`, `trace_totals`), `cli.py` (`replay`, `open_tracer`, run events), `evals.py` (`load_tasks`, `run_pytest`, `original_tests_pass`, `load_check`, `run_task`, `run_suite`, `summarize`, `save_results`, `comparison_table`), `evals/run_evals.py`, plus one eval task of your own |
-| M8 Polish | ⏳ | `m8` | — | — |
+| **M8** Polish | ✅ done | `m8` | `tests/contract/test_m8_docs.py` | your own README (7 questions: what, features, quick start, architecture, trade-offs, evidence, limitations), `docs/architecture.md`, `.github/workflows/ci.yml`, a demo GIF |
 
 Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
 
@@ -200,6 +200,56 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
   | `gpt-6-luna` as main | 9/9 | 7.7 | 165,071 / 5,733 | $0.019 | 145s |
 
   Both reached 100%, so the suite is saturated and harder tasks are needed to separate models.
+
+## M8 — Polish
+
+- `README.md`, written for reviewers: a one-sentence pitch, an abridged real run, demo-GIF
+  instructions (`docs/demo.tape` for vhs), features, quick start, a Mermaid architecture diagram,
+  design decisions *with their costs*, the real eval table, limitations and a roadmap.
+- `docs/architecture.md`: layers, one task step by step, data types, the adapter comparison, the safety
+  model, context management, extension points and the testing strategy.
+- `.github/workflows/ci.yml`: Ubuntu and Windows, uv (setup-uv pinned to a commit SHA), and
+  `uv sync --locked`, then `ruff check`, `ruff format --check`, `mypy src` and offline `pytest` with
+  coverage. It has not run on GitHub yet, because this repository has no remote.
+- `.gitattributes` with `eol=lf`: fixtures and exact-content tests see the same bytes on every OS.
+- `docs/learning/interview-questions.md`: 27 questions, each with hints pointing to code, plus tips
+  for presenting the project.
+- `tests/contract/test_m8_docs.py` keeps the docs honest. It checks the README sections, that the eval
+  numbers in the README match `evals/results/*.json`, that every learning note has its 6 sections, the
+  interview questions, and the CI steps (with no `--run-live`).
+
+## Definition of Done (PROJECT_SPEC §8)
+
+- [x] `uv sync && uv run minicode run "Fix the failing tests" --cwd examples/buggy_calculator` works with
+      OpenAI (`gpt-6.1-sol`, M3, M5 and M6 runs). Anthropic is covered by offline contract tests only
+      (no key available).
+- [x] `uv run pytest` is green offline (283 passed, 5 live tests skipped).
+- [ ] CI is green: the workflow is written but cannot run until the repo is pushed to GitHub.
+- [x] `uv run python evals/run_evals.py` produces a report (two models compared, saved in `evals/results/`).
+- [x] Tags `m0` … `m8` exist. Each tag was checked out into a clean worktree and its own gates were
+      run (`uv sync --locked`, `pytest`, `ruff check`, `ruff format --check`, `mypy src`); see
+      "Tag verification" below.
+- [x] README, architecture and learning notes are complete (enforced by the `m8` tests).
+
+### Tag verification
+
+Run on 2026-10-17 (Windows 11, Git Bash, uv). Each tag was checked out with `git worktree add --detach`
+into an empty directory, then `uv sync --locked`, `uv run pytest -q`, `uv run ruff check .`,
+`uv run ruff format --check .` and `uv run mypy src` were run there. The skipped tests are the opt-in
+`live` tests.
+
+| Tag | pytest | ruff check | ruff format | mypy |
+|---|---|---|---|---|
+| `m0` | 44 passed, 1 skipped | ok | ok | ok |
+| `m1` | 70 passed, 3 skipped | ok | ok | ok |
+| `m2` | 111 passed, 5 skipped | ok | ok | ok |
+| `m3` | 170 passed, 5 skipped | ok | ok | ok |
+| `m4` | 185 passed, 5 skipped | ok | ok | ok |
+| `m5` | 207 passed, 5 skipped | ok | ok | ok |
+| `m6` | 235 passed, 5 skipped | ok | ok | ok |
+| `m7` | 269 passed, 5 skipped | ok | ok | ok |
+
+`m8` is the tag that contains this file, so it was checked the same way right after tagging.
 
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
