@@ -1,0 +1,3 @@
+category: bugfix
+max_steps: 20
+prompt: The tests for listutils fail. Find the bug and fix it without changing the tests.

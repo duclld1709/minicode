@@ -1,0 +1,3 @@
+category: skill
+max_steps: 20
+prompt: Fix the typo in the greeting so the tests pass. Follow this project's conventions.

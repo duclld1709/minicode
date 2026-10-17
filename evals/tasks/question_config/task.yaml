@@ -1,0 +1,4 @@
+category: question
+max_steps: 15
+prompt: >
+  On which port does the server listen by default, and which environment variable changes it?

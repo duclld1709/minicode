@@ -1,0 +1,5 @@
+category: refactor
+max_steps: 25
+prompt: >
+  Rename the function `calc_total` to `compute_total` everywhere in this project (definition,
+  all call sites, imports and tests). Behaviour must not change and the tests must pass.

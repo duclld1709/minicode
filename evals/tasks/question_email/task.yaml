@@ -1,0 +1,5 @@
+category: question
+max_steps: 15
+prompt: >
+  Which function decides whether an email address is valid, in which file is it defined, and
+  what does it require of the top-level domain (the part after the last dot)? Answer briefly.

@@ -1,0 +1,6 @@
+category: feature
+max_steps: 20
+prompt: >
+  Add a function `is_palindrome(text: str) -> bool` to textutils.py. It must ignore case, spaces
+  and punctuation (so "A man, a plan, a canal: Panama" is a palindrome). Add pytest tests for it
+  in tests/test_textutils.py and make sure the whole test suite passes.
