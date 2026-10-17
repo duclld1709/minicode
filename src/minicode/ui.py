@@ -112,6 +112,55 @@ def make_permission_prompt(console: Console, read_answer: Callable[[], str]) -> 
     return prompt
 
 
+def render_trace(events: list[dict[str, Any]], console: Console) -> None:
+    """Pretty-print a JSONL trace (see tracing.py), then a totals line."""
+    if not events:
+        console.print("(empty trace)")
+        return
+    start = float(events[0].get("ts", 0))
+    for event in events:
+        offset = f"{float(event.get('ts', start)) - start:7.1f}s "
+        console.print(Text.assemble((offset, "dim"), *_trace_line(event)))
+    console.print(Text(trace_totals(events), style="bold"))
+
+
+def _trace_line(event: dict[str, Any]) -> list[tuple[str, str] | str]:
+    kind = event.get("type", "?")
+    if kind == "llm_call":
+        calls = ", ".join(c["name"] for c in event.get("tool_calls", [])) or "-"
+        return [
+            (f"[llm:{event.get('label')}] ", "cyan"),
+            f"{event.get('latency_ms')}ms in {event.get('input_tokens')} "
+            f"out {event.get('output_tokens')} | {event.get('stop_reason')} | tools: {calls}",
+        ]
+    if kind == "tool_call":
+        status = ("ERROR", "red") if event.get("is_error") else ("ok", "green")
+        return [
+            ("[tool] ", "magenta"),
+            f"{event.get('name')}({short_args(event.get('arguments', {}), 80)}) "
+            f"{event.get('latency_ms')}ms ",
+            status,
+            f" {event.get('result_chars')} chars",
+        ]
+    if kind in ("run_start", "run_end", "session_start"):
+        details = {k: v for k, v in event.items() if k not in ("ts", "type")}
+        return [(f"[{kind}] ", "bold yellow"), short_args(details, 200)]
+    return [(f"[{kind}] ", "yellow"), str(event.get("message", ""))]
+
+
+def trace_totals(events: list[dict[str, Any]]) -> str:
+    llm = [e for e in events if e.get("type") == "llm_call"]
+    tools = [e for e in events if e.get("type") == "tool_call"]
+    costs = [e["cost"] for e in llm if e.get("cost") is not None]
+    cost = f"${sum(costs):.4f}" if costs else "cost n/a"
+    return (
+        f"{len(llm)} LLM calls | in {sum(e.get('input_tokens', 0) for e in llm)} "
+        f"out {sum(e.get('output_tokens', 0) for e in llm)} | {cost} | "
+        f"{len(tools)} tool calls ({sum(bool(e.get('is_error')) for e in tools)} errors) | "
+        f"LLM time {sum(e.get('latency_ms', 0) for e in llm) / 1000:.1f}s"
+    )
+
+
 def format_summary(result: AgentResult) -> str:
     cost = "cost n/a" if result.cost is None else f"${result.cost:.4f}"
     return (

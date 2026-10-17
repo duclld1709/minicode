@@ -9,6 +9,7 @@ terminal or network. Rendering lives in `ui.py`.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,13 +24,14 @@ from rich.text import Text
 
 from minicode.agent.context import Compactor
 from minicode.agent.guards import Guards, PermissionPolicy
-from minicode.agent.loop import Agent, AgentResult
+from minicode.agent.loop import Agent, AgentListener, AgentResult
 from minicode.agent.prompts import PromptContext, build_system_prompt, read_git_status
 from minicode.agent.router import Router
 from minicode.chat import ChatSession
 from minicode.config import ConfigError, Settings, load_settings
 from minicode.harness.memory import load_project_memory
 from minicode.harness.skills import discover_skills, make_skill_tool
+from minicode.llm.base import LLMClient
 from minicode.llm.factory import create_client
 from minicode.llm.types import Usage
 from minicode.mcp.client import McpManager, load_mcp_config
@@ -38,7 +40,18 @@ from minicode.tools.base import Tool, ToolError
 from minicode.tools.shell import ShellTool, find_bash
 from minicode.tools.todo import TodoList
 from minicode.tools.toolbelt import build_registry
-from minicode.ui import RichListener, format_summary, make_permission_prompt
+from minicode.tracing import (
+    TRACES_DIR,
+    FanoutListener,
+    TracedLLM,
+    TraceListener,
+    Tracer,
+    latest_trace,
+    load_trace,
+    new_trace_path,
+    preview,
+)
+from minicode.ui import RichListener, format_summary, make_permission_prompt, render_trace
 from minicode.workflows.commit_msg import NoChangesError, read_diff, write_commit_message
 from minicode.workflows.subagent import DelegateTool
 from minicode.workflows.verifier import run_with_verification
@@ -98,10 +111,12 @@ def main(
     console = Console()
     settings = _load_settings_or_exit(cwd, console)
     options = RunOptions(mode, max_steps, max_cost, route)
+    tracer = open_tracer(cwd, settings, options)
     with mcp_tools(cwd, console) as extra_tools:
-        agent = build_agent(settings, cwd, console, options, extra_tools)
+        agent = build_agent(settings, cwd, console, options, extra_tools, tracer)
         console.print(f"[dim]minicode | {agent.llm.model} | mode {mode.value} | /exit to quit[/]")
-        agent_repl(agent, console, read_line=lambda: console.input("[bold green]task>[/] "))
+        agent_repl(agent, console, lambda: console.input("[bold green]task>[/] "), tracer)
+    console.print(f"[dim]Trace: {tracer.path}[/]")
 
 
 @app.command()
@@ -123,18 +138,61 @@ def run(
     console = Console()
     settings = _load_settings_or_exit(cwd, console)
     options = RunOptions(mode, max_steps, max_cost, route)
+    tracer = open_tracer(cwd, settings, options)
     with mcp_tools(cwd, console) as extra_tools:
-        agent = build_agent(settings, cwd, console, options, extra_tools)
+        agent = build_agent(settings, cwd, console, options, extra_tools, tracer)
         if verify is None:
-            result = run_task(agent, task, console)
+            result = run_task(agent, task, console, tracer)
             ok = result is not None and result.stop_reason == "completed"
         else:
-            ok = run_verified_task(agent, task, console, verify, max_verify_rounds, cwd)
+            ok = run_verified_task(agent, task, console, verify, max_verify_rounds, cwd, tracer)
+    console.print(f"[dim]Trace: {tracer.path}[/]")
     raise typer.Exit(code=0 if ok else 1)
 
 
+@app.command()
+def replay(
+    trace: Annotated[
+        Path | None, typer.Argument(help="Trace file (default: the latest in --cwd).")
+    ] = None,
+    cwd: CwdOption = Path("."),
+) -> None:
+    """Pretty-print a session trace (.minicode/traces/*.jsonl)."""
+    console = Console()
+    path = trace or latest_trace(cwd)
+    if path is None or not path.is_file():
+        console.print(Text(f"No trace found ({path or cwd / TRACES_DIR}).", style="red"))
+        raise typer.Exit(code=1)
+    console.print(Text(f"Trace: {path}", style="dim"))
+    render_trace(load_trace(path), console)
+
+
+def open_tracer(cwd: Path, settings: Settings, options: RunOptions) -> Tracer:
+    """One trace file per session. API keys are masked in every line written."""
+    keys = [
+        k.get_secret_value() for k in (settings.openai_api_key, settings.anthropic_api_key) if k
+    ]
+    tracer = Tracer(new_trace_path(cwd), secrets=keys)
+    tracer.event(
+        "session_start",
+        provider=settings.provider,
+        model=settings.model,
+        small_model=settings.effective_small_model,
+        cwd=str(cwd.resolve()),
+        mode=options.mode.value,
+        route=options.route,
+    )
+    return tracer
+
+
 def run_verified_task(
-    agent: Agent, task: str, console: Console, command: str, max_rounds: int, cwd: Path
+    agent: Agent,
+    task: str,
+    console: Console,
+    command: str,
+    max_rounds: int,
+    cwd: Path,
+    tracer: Tracer | None = None,
 ) -> bool:
     """Evaluator-optimizer: run, check with `command`, feed failures back."""
     shell = ShellTool(cwd, bash=find_bash(os.environ), environ=os.environ)
@@ -146,6 +204,8 @@ def run_verified_task(
             return 1, str(exc)
 
     def on_check(exit_code: int, output: str) -> None:
+        if tracer is not None:
+            tracer.event("verify", command=command, exit_code=exit_code, output=preview(output))
         _end_stream(agent)
         if exit_code == 0:
             console.print(Text.assemble(("[verify passed] ", "green"), command))
@@ -233,14 +293,20 @@ def build_agent(
     console: Console,
     options: RunOptions,
     extra_tools: list[Tool] | None = None,
+    tracer: Tracer | None = None,
 ) -> Agent:
     """Wire the real dependencies together. Tests build Agents directly instead."""
     try:
-        llm = create_client(settings)
-        small_llm = create_client(settings, small=True)
+        llm: LLMClient = create_client(settings)
+        small_llm: LLMClient = create_client(settings, small=True)
     except ConfigError as exc:
         _print_error(console, "Config error", exc)
         raise typer.Exit(code=2) from exc
+    listener: AgentListener = RichListener(console)
+    if tracer is not None:
+        llm = TracedLLM(llm, tracer, label="main", prices=settings.pricing)
+        small_llm = TracedLLM(small_llm, tracer, label="small", prices=settings.pricing)
+        listener = FanoutListener(listener, TraceListener(tracer))
     permission = PermissionPolicy(
         mode=options.mode.value,
         prompt=make_permission_prompt(console, read_answer=lambda: console.input("")),
@@ -265,7 +331,7 @@ def build_agent(
         Guards(max_steps=options.max_steps, max_cost_usd=options.max_cost),
         permission=permission,
         system=build_system_prompt(context),
-        listener=RichListener(console),
+        listener=listener,
         max_tokens=settings.max_tokens,
         prices=settings.pricing,
         compactor=Compactor(small_llm, threshold_tokens=settings.compact_at_tokens),
@@ -275,20 +341,39 @@ def build_agent(
     return agent
 
 
-def run_task(agent: Agent, task: str, console: Console) -> AgentResult | None:
+def run_task(
+    agent: Agent, task: str, console: Console, tracer: Tracer | None = None
+) -> AgentResult | None:
     """Run one task and print its summary. Provider errors are shown, not raised."""
+    if tracer is not None:
+        tracer.event("run_start", task=task)
+    started = time.perf_counter()
     try:
         result = agent.run(task)
     except Exception as exc:
         _print_error(console, "Error", exc)
+        if tracer is not None:
+            tracer.event("error", message=short_error(exc))
         return None
     _end_stream(agent)
+    if tracer is not None:
+        tracer.event(
+            "run_end",
+            stop_reason=result.stop_reason,
+            steps=result.steps,
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            cost=result.cost,
+            wall_ms=round((time.perf_counter() - started) * 1000),
+        )
     style = "green" if result.stop_reason == "completed" else "yellow"
     console.print(Text(format_summary(result), style=style))
     return result
 
 
-def agent_repl(agent: Agent, console: Console, read_line: Callable[[], str]) -> None:
+def agent_repl(
+    agent: Agent, console: Console, read_line: Callable[[], str], tracer: Tracer | None = None
+) -> None:
     """One conversation, many tasks. Ctrl+C during a task stops the task, not the REPL."""
     while True:
         try:
@@ -298,7 +383,7 @@ def agent_repl(agent: Agent, console: Console, read_line: Callable[[], str]) -> 
         if task in EXIT_COMMANDS:
             break
         if task:
-            run_task(agent, task, console)
+            run_task(agent, task, console, tracer)
     console.print("[dim]Bye.[/]")
 
 
@@ -380,8 +465,9 @@ def _money(value: float | None) -> str:
 
 def _end_stream(agent: Agent) -> None:
     """Finish a half-printed streamed line before printing something else."""
-    if isinstance(agent.listener, RichListener):
-        agent.listener.end_line()
+    end_line = getattr(agent.listener, "end_line", None)  # RichListener or FanoutListener
+    if end_line is not None:
+        end_line()
 
 
 def _print_error(console: Console, label: str, exc: Exception) -> None:
