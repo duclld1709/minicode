@@ -16,6 +16,7 @@ dependencies = [
     "rich>=14",
     "python-dotenv>=1.1",
     "mcp==2.3.0",
+    "pyyaml>=6.0.2",
 ]
 
 [project.scripts]
@@ -28,6 +29,7 @@ dev = [
     "pytest-cov>=6.2",
     "ruff>=0.12",
     "mypy>=1.17",
+    "types-pyyaml>=6.0",
 ]
 
 [build-system]
