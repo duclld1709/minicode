@@ -54,6 +54,9 @@ Primary target is Linux/WSL; Windows native is best-effort and is where this rep
 ```bash
 uv sync                                   # install
 uv run minicode chat                      # M0: multi-turn chat
+uv run minicode run "task" --cwd DIR      # M3: one-shot agent (--mode ask|accept-edits|auto)
+uv run minicode --cwd DIR                 # M3: agent REPL
+# Run the buggy_calculator demo on a COPY (or git checkout it afterwards).
 uv run pytest -m m0                       # one milestone's tests
 uv run pytest --run-live -m live          # real API smoke tests
 ```

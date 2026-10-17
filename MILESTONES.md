@@ -8,7 +8,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M0** Setup & first LLM call | ✅ done | `m0` | `tests/contract/test_m0_types.py`, `tests/contract/test_m0_fake_client.py` | `llm/types.py` (`ToolCall`, `ToolResult`, `Usage.__add__`, `LLMResponse`, `Message` + constructors), `llm/base.py` (`LLMClient` Protocol), `llm/fake_client.py` (`FakeLLMClient`), `config.py` (`load_settings`), `llm/pricing.py` (`estimate_cost`), `llm/openai_client.py` (`to_input_items`, `from_response`), `chat.py` (`ChatSession.send`), `cli.py` (`chat`, `chat_loop`) |
 | **M1** Providers, streaming, structured output | ✅ done | `m1` | `tests/contract/test_m1_adapters.py`, `tests/contract/test_m1_structured.py` | `llm/anthropic_client.py` (`to_messages`, `to_tool`, `from_message`, `AnthropicClient.complete` incl. streaming), streaming branch of `OpenAIClient.complete`, `llm/structured.py` (`complete_structured`, `extract_json`, `format_validation_error`), `llm/factory.py` (anthropic branch), streaming printer in `cli.py` |
 | **M2** Tool calling | ✅ done | `m2` | `tests/contract/test_m2_registry.py`, `tests/contract/test_m2_fs_tools.py`, `tests/contract/test_m2_shell.py` | `tools/base.py` (`Tool`, `ToolRegistry.register/schemas/execute`, `ToolError`, `truncate_output`), `tools/fs.py` (`resolve_in_workspace`, `FileTools.read_file/list_dir/glob/grep/write_file/edit_file`), `tools/shell.py` (`find_bash`, `scrubbed_env`, `ShellTool.run_bash`), `tools/toolbelt.py` (`build_registry`) |
-| M3 Agent loop & guards | ⏳ | `m3` | — | — |
+| **M3** Agent loop & guards | ✅ done | `m3` | `tests/contract/test_m3_agent.py`, `tests/contract/test_m3_permissions.py`, `tests/contract/test_m3_guards.py` | `agent/loop.py` (`Agent.run`, `_loop`, `_execute`, `_close_dangling_tool_calls`, `AgentResult`, `AgentListener`), `agent/guards.py` (`Guards.check`, `dangerous_command_reason`, `PermissionPolicy.decide`), `agent/prompts.py` (`build_system_prompt`), `ui.py` (`RichListener`, `make_permission_prompt`), `cli.py` (`run`, REPL `agent_repl`, `build_agent`) |
 | M4 MCP | ⏳ | `m4` | — | — |
 | M5 Harness / context engineering | ⏳ | `m5` | — | — |
 | M6 Workflow patterns | ⏳ | `m6` | — | — |
@@ -64,6 +64,36 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
 - Acceptance: an offline tool-use round trip with `FakeLLMClient`, a test for every error case, and a
   live round trip against OpenAI (`tests/e2e/test_m2_live.py`). Coverage of `tools/` is 93%.
 
+## M3 — Agent loop & guards
+
+- `Agent(llm, registry, guards, *, permission, system, listener, max_tokens, prices, clock)`. Its
+  `run(task) -> AgentResult(final_text, steps, usage, stop_reason, cost)`.
+- `history` is kept across `run()` calls, so a REPL session is one continuous conversation.
+- Stop reasons:
+  - `completed`;
+  - `output_truncated`: the model hit `max_tokens` without calling a tool;
+  - `max_steps`, `token_budget`, `cost_budget`, `wall_time`: checked *before* each LLM call;
+  - `interrupted`: Ctrl+C.
+- On Ctrl+C, every unanswered tool call gets an "Interrupted" error result. Without that, the next
+  request would be rejected by both providers. The same clean-up runs before any other exception is
+  re-raised.
+- `PermissionPolicy(mode, prompt)`:
+  - `ask` asks before `write` and `exec`;
+  - `accept-edits` allows `write` and asks before `exec`;
+  - `auto` never asks;
+  - answering "always" allows that tool for the rest of the session;
+  - the default `deny_all` prompt means a bare `Agent` refuses risky tools.
+- The `run_bash` denylist (`rm -rf /`, `sudo`, `curl … | sh`, `mkfs`, `dd of=/dev/…`, fork bomb, …)
+  is checked before permissions, in every mode, and the user is never asked about these.
+- CLI:
+  - `minicode run "task" [--cwd] [--mode] [--max-steps] [--max-cost]` exits with 0 only when the
+    task completed;
+  - `minicode [--cwd] [--mode]` with no subcommand starts the REPL;
+  - `rich` shows `> tool(args)` and a 4-line preview of each result.
+- Acceptance: `examples/buggy_calculator` (3 bugs) was fixed end to end with `gpt-6.1-sol` in 8 steps
+  ($0.04, 2026-10-17): explore → pytest → 3× `edit_file` → pytest (9 passed) → summary.
+  Every stopping condition and guard has an offline test.
+
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
 All are **additions**. Nothing in the spec signature was removed or renamed.
@@ -78,6 +108,8 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
 | `Tool.handler` (M2) | called as `handler(validated_args)` with an `input_model` instance | the spec only said `Callable[..., str]`. One typed argument keeps handlers simple and fully typed |
 | `ToolRegistry` (M2) | added `get(name)`, `names` and optional `max_output_lines` / `max_output_chars` | the agent loop needs a tool's `risk` for permission checks (M3) |
 | `INVALID_JSON_KEY` (M2) | moved from `llm/openai_client.py` to `llm/types.py` | the tool layer must not import from a specific adapter |
+| `Agent.__init__` (M3) | keyword-only `permission`, `system`, `listener`, `max_tokens`, `prices`, `clock` after the spec's `(llm, registry, guards)` | dependency injection: tests pass a fake clock, a scripted permission prompt and a null listener |
+| `AgentResult` (M3) | added `cost: float \| None` | budget and summary display |
 
 ## Deviations from the spec
 
@@ -85,7 +117,8 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
 - **Live tests** need an explicit `--run-live` flag *and* a key (a key alone is not enough), so a plain
   `uv run pytest` never spends money.
 - **Extra modules** outside the spec layout: `llm/factory.py` (provider → client), `chat.py`
-  (`ChatSession`), `llm/structured.py` and `tools/toolbelt.py`.
+  (`ChatSession`), `llm/structured.py`, `tools/toolbelt.py` and `ui.py` (terminal rendering, split
+  out of `cli.py` to keep it thin).
 - **Workspace sandbox** lives in `tools/fs.py` (`resolve_in_workspace`) since M2, not in `agent/guards.py`.
   It is enforced where paths are used, so no tool can skip it. `guards.py` (M3) owns permissions,
   budgets and the `run_bash` denylist.
