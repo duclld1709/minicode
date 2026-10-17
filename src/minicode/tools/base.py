@@ -41,6 +41,10 @@ class Tool:
 
     `handler` is called with one argument: an instance of `input_model`, already
     validated. So handlers never see malformed input.
+
+    `input_schema` overrides the schema generated from `input_model`. It exists for
+    tools whose schema comes from elsewhere (MCP servers send plain JSON Schema);
+    those use a permissive `input_model` and let the remote side validate.
     """
 
     name: str
@@ -48,6 +52,10 @@ class Tool:
     input_model: type[BaseModel]
     handler: Callable[..., str]
     risk: Risk
+    input_schema: dict[str, Any] | None = None
+
+    def schema(self) -> dict[str, Any]:
+        return self.input_schema or self.input_model.model_json_schema()
 
 
 @dataclass
@@ -76,11 +84,7 @@ class ToolRegistry:
     def schemas(self) -> list[dict[str, Any]]:
         """Provider-neutral schemas: {name, description, input_schema}. Adapters convert them."""
         return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_model.model_json_schema(),
-            }
+            {"name": tool.name, "description": tool.description, "input_schema": tool.schema()}
             for tool in self._tools.values()
         ]
 
@@ -109,7 +113,7 @@ class ToolRegistry:
         try:
             args = tool.input_model.model_validate(call.arguments)
         except ValidationError as exc:
-            schema = json.dumps(tool.input_model.model_json_schema())
+            schema = json.dumps(tool.schema())
             raise ToolError(
                 f"Invalid arguments for '{call.name}': {format_validation_error(exc)}. "
                 f"Expected JSON schema: {schema}"
