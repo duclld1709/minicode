@@ -10,7 +10,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M2** Tool calling | ✅ done | `m2` | `tests/contract/test_m2_registry.py`, `tests/contract/test_m2_fs_tools.py`, `tests/contract/test_m2_shell.py` | `tools/base.py` (`Tool`, `ToolRegistry.register/schemas/execute`, `ToolError`, `truncate_output`), `tools/fs.py` (`resolve_in_workspace`, `FileTools.read_file/list_dir/glob/grep/write_file/edit_file`), `tools/shell.py` (`find_bash`, `scrubbed_env`, `ShellTool.run_bash`), `tools/toolbelt.py` (`build_registry`) |
 | **M3** Agent loop & guards | ✅ done | `m3` | `tests/contract/test_m3_agent.py`, `tests/contract/test_m3_permissions.py`, `tests/contract/test_m3_guards.py` | `agent/loop.py` (`Agent.run`, `_loop`, `_execute`, `_close_dangling_tool_calls`, `AgentResult`, `AgentListener`), `agent/guards.py` (`Guards.check`, `dangerous_command_reason`, `PermissionPolicy.decide`), `agent/prompts.py` (`build_system_prompt`), `ui.py` (`RichListener`, `make_permission_prompt`), `cli.py` (`run`, REPL `agent_repl`, `build_agent`) |
 | **M4** MCP | ✅ done | `m4` | `tests/contract/test_m4_mcp.py` | `mcp/server.py` (`build_server_registry`, `create_mcp_server`, `serve_stdio`), `mcp/client.py` (`load_mcp_config`, `McpConnection` start/list_tools/call_tool/close, `tool_name`, `result_text`, `tools_from_connection`, `McpManager`), `Tool.input_schema` + `Tool.schema()`, `cli.py` (`mcp-serve`, `mcp_tools`) |
-| M5 Harness / context engineering | ⏳ | `m5` | — | — |
+| **M5** Harness / context engineering | ✅ done | `m5` | `tests/contract/test_m5_harness.py`, `tests/contract/test_m5_compaction.py`, `tests/contract/test_m5_prompt_injection.py` | `agent/prompts.py` (`PromptContext`, `build_system_prompt` + section functions, `read_git_status`, `wrap_tool_output`), `harness/memory.py` (`load_project_memory`), `harness/skills.py` (`parse_skill_file`, `discover_skills`, `make_skill_tool`), `agent/context.py` (`estimate_tokens`, `Compactor.maybe_compact`/`split_index`, `clear_old_tool_results`, `summary_message`, `render_transcript`), compaction + wrapping hooks in `Agent` |
 | M6 Workflow patterns | ⏳ | `m6` | — | — |
 | M7 Observability & evals | ⏳ | `m7` | — | — |
 | M8 Polish | ⏳ | `m8` | — | — |
@@ -112,6 +112,34 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
 - Startup fix: provider SDKs are imported lazily in `llm/factory.py`. CLI startup went from 11s to 2s
   on Windows.
 
+## M5 — Harness / context engineering
+
+- System prompt sections, in this order: identity, how to work, safety, environment (cwd, OS, date,
+  `git status --short --branch`), project memory (`AGENTS.md`, max 20k chars), skills. Each optional
+  section is included only when it has content.
+- Skills live in `.minicode/skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`).
+  The prompt lists only names and descriptions. The `load_skill(name)` tool returns the body and lists
+  the other files in the skill folder. The two sample skills (`write-pytest-tests`, `python-refactor`)
+  and an `AGENTS.md` are in `examples/buggy_calculator/`.
+- Every registry result is wrapped as `<tool_output tool="...">…</tool_output>` before it goes into
+  history. A closing tag inside the content is neutralized. The safety section explains that wrapped
+  content is data.
+- Compaction (`Compactor`, small model) runs after each tool step once the estimated size (chars/4)
+  reaches `compact_at_tokens` (default 100k, settable in `config.toml`):
+  1. clear old tool results longer than 2,000 chars;
+  2. if that is not enough, summarize everything before the last 6 steps. The user's requests are
+     kept verbatim.
+
+  The cut is always placed right before an assistant message. The summary call's usage counts toward
+  the budget, and the listener shows a notice.
+- Prompt injection test: a README with hidden instructions, and a scripted model that obeys them.
+  The denylist blocks `curl | sh`, the sandbox blocks `../exfil.txt`, and in `ask` mode the user is
+  asked about `cat ~/.ssh/id_rsa`. The test also documents the honest limitation of `auto` mode.
+- Acceptance: compaction threshold, skills loaded only on demand, and injection tests, all offline.
+  Live run with `gpt-6.1-sol` on 2026-10-17: the task "add tests for multiply" made the model call
+  `load_skill("write-pytest-tests")` first and follow the skill (8 steps, $0.05).
+- New dependencies: `pyyaml` (skill frontmatter), and `types-PyYAML` (dev).
+
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
 All are **additions**. Nothing in the spec signature was removed or renamed.
@@ -129,6 +157,10 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
 | `Agent.__init__` (M3) | keyword-only `permission`, `system`, `listener`, `max_tokens`, `prices`, `clock` after the spec's `(llm, registry, guards)` | dependency injection: tests pass a fake clock, a scripted permission prompt and a null listener |
 | `AgentResult` (M3) | added `cost: float \| None` | budget and summary display |
 | `Tool` (M4) | added optional `input_schema: dict \| None = None` and `schema()` | MCP tools arrive as JSON Schema, not pydantic models. They use a permissive `input_model` (`AnyArguments`) and let the server validate |
+| Tool results in `Agent.history` (M5) | content is now wrapped in `<tool_output tool="…">…</tool_output>` | marks untrusted data (spec §3.4). The three M3 contract assertions that compared content exactly now use `in`, so they pass with or without wrapping |
+| `AgentListener` (M5) | added `on_notice(message)` | lets the UI report compaction. Custom listeners need the new method |
+| `Agent.__init__` (M5) | added keyword `compactor: Compactor \| None = None` | compaction is optional and injected |
+| `build_system_prompt` (M5) | now takes a `PromptContext` instead of `(workspace, *, today, os_name)` | the prompt has many optional inputs now; one dataclass keeps the call readable (not part of §3.2) |
 
 ## Deviations from the spec
 
@@ -142,4 +174,5 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
   It is enforced where paths are used, so no tool can skip it. `guards.py` (M3) owns permissions,
   budgets and the `run_bash` denylist.
 - The symlink-escape test is skipped on Windows without symlink privileges. It runs on Linux/CI.
-- **Extra dev deps** (approved): `pytest-cov`, `types-PyYAML` (added in M7 together with `pyyaml`).
+- **Extra dev deps** (approved): `pytest-cov`, and `types-PyYAML` (added in M5 together with `pyyaml`,
+  which skills need for their frontmatter).

@@ -21,3 +21,7 @@ uv run minicode chat                        # plain multi-turn chat, no tools
 uv run minicode mcp-serve --cwd .           # expose read-only file tools over MCP (stdio)
 uv run pytest                               # offline test suite
 ```
+
+Per-project context: `AGENTS.md` at the workspace root is loaded into every request. Skills in
+`.minicode/skills/<name>/SKILL.md` are listed by description and loaded on demand. MCP servers go in
+`.minicode/mcp.json`. See `examples/buggy_calculator/` for one of each.
