@@ -19,6 +19,7 @@ htmlcov/
 
 # minicode runtime output
 .minicode/traces/
+.demo/
 
 # Editors / OS
 .vscode/
