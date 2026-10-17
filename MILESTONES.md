@@ -11,7 +11,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M3** Agent loop & guards | ✅ done | `m3` | `tests/contract/test_m3_agent.py`, `tests/contract/test_m3_permissions.py`, `tests/contract/test_m3_guards.py` | `agent/loop.py` (`Agent.run`, `_loop`, `_execute`, `_close_dangling_tool_calls`, `AgentResult`, `AgentListener`), `agent/guards.py` (`Guards.check`, `dangerous_command_reason`, `PermissionPolicy.decide`), `agent/prompts.py` (`build_system_prompt`), `ui.py` (`RichListener`, `make_permission_prompt`), `cli.py` (`run`, REPL `agent_repl`, `build_agent`) |
 | **M4** MCP | ✅ done | `m4` | `tests/contract/test_m4_mcp.py` | `mcp/server.py` (`build_server_registry`, `create_mcp_server`, `serve_stdio`), `mcp/client.py` (`load_mcp_config`, `McpConnection` start/list_tools/call_tool/close, `tool_name`, `result_text`, `tools_from_connection`, `McpManager`), `Tool.input_schema` + `Tool.schema()`, `cli.py` (`mcp-serve`, `mcp_tools`) |
 | **M5** Harness / context engineering | ✅ done | `m5` | `tests/contract/test_m5_harness.py`, `tests/contract/test_m5_compaction.py`, `tests/contract/test_m5_prompt_injection.py` | `agent/prompts.py` (`PromptContext`, `build_system_prompt` + section functions, `read_git_status`, `wrap_tool_output`), `harness/memory.py` (`load_project_memory`), `harness/skills.py` (`parse_skill_file`, `discover_skills`, `make_skill_tool`), `agent/context.py` (`estimate_tokens`, `Compactor.maybe_compact`/`split_index`, `clear_old_tool_results`, `summary_message`, `render_transcript`), compaction + wrapping hooks in `Agent` |
-| M6 Workflow patterns | ⏳ | `m6` | — | — |
+| **M6** Workflow patterns | ✅ done | `m6` | `tests/contract/test_m6_chaining_routing.py`, `tests/contract/test_m6_parallel.py`, `tests/contract/test_m6_subagent_verifier.py`, `tests/contract/test_m6_todo.py` | `workflows/commit_msg.py` (`read_diff`, `write_commit_message`), `agent/router.py` (`TaskRoute`, `Router.route`), `llm/metered.py` (`MeteredLLM`), parallel reads in `Agent._execute_all`/`_execute_parallel`, `Agent.add_usage`, `ToolRegistry.subset`, `workflows/subagent.py` (`DelegateTool`), `workflows/verifier.py` (`run_with_verification`), `tools/todo.py` (`TodoList`), `ShellTool.run` |
 | M7 Observability & evals | ⏳ | `m7` | — | — |
 | M8 Polish | ⏳ | `m8` | — | — |
 
@@ -140,6 +140,31 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
   `load_skill("write-pytest-tests")` first and follow the skill (8 steps, $0.05).
 - New dependencies: `pyyaml` (skill frontmatter), and `types-PyYAML` (dev).
 
+## M6 — Workflow patterns
+
+| Pattern | Where | How |
+|---|---|---|
+| Chaining | `minicode commit-msg` → `workflows/commit_msg.py` | Uses the staged diff, or the unstaged diff if nothing is staged. Call 1 (small model) summarizes it; call 2 writes a Conventional Commit message from the summary only |
+| Routing | `agent/router.py`, `Agent(router=...)`, `--route/--no-route` (on by default) | The small model returns `TaskRoute(kind="question"\|"edit")` via `complete_structured`. `question` runs with `registry.subset(risk == "read")`. If routing fails, it falls back to `edit` |
+| Parallelization | `Agent._execute_all` | Each run of consecutive `read` calls in one turn runs in a thread pool (max 8 workers). Results are collected in call order. Any other call is a barrier and runs alone |
+| Orchestrator-workers | `delegate` tool → `workflows/subagent.py` | A fresh `Agent` with read-only filesystem tools and no `delegate`, max 15 steps. It returns its final report. Its usage is added to the parent through `Agent.add_usage` |
+| Evaluator-optimizer | `minicode run … --verify "pytest -q" [--max-verify-rounds 3]` → `workflows/verifier.py` | After `completed`, the check command runs. A non-zero exit sends the output back to the agent as feedback. There are at most K checks, and no extra rounds if the agent stopped for another reason |
+
+- `todo_write` replaces the whole plan (at most one item `in_progress`); `todo_read` shows it. Both have
+  risk `read` and keep the plan in memory only.
+- Bug found and fixed while building parallel reads: with `pool.map`, a Ctrl+C in one worker lost
+  the results of reads that had already finished. A weak substring assertion in the M3 contract test
+  ("ran" also appears in the "Interrupted … ran." placeholder) had hidden this. The test now also
+  checks `is_error`. The fix collects futures one by one.
+- Acceptance: at least one offline test per pattern (24 contract tests, plus CLI tests for `--verify`
+  and `commit-msg`). Live runs with `gpt-6.1-sol` / `gpt-6-luna` on 2026-10-17:
+  - "Fix the failing tests" `--verify "pytest -q"`: routed as `edit`; `todo_write` was used 4 times;
+    5 parallel `read_file` calls; verified on the first check (12 steps, $0.09).
+  - "Which functions raise…, use delegate": routed as `question`; 2 parallel `delegate` calls; no
+    permission prompts in `ask` mode, because only read tools were available ($0.05).
+  - `commit-msg` on the resulting diff produced `fix(calculator): correct arithmetic and median
+    calculations` in 2 calls.
+
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
 All are **additions**. Nothing in the spec signature was removed or renamed.
@@ -161,6 +186,9 @@ All are **additions**. Nothing in the spec signature was removed or renamed.
 | `AgentListener` (M5) | added `on_notice(message)` | lets the UI report compaction. Custom listeners need the new method |
 | `Agent.__init__` (M5) | added keyword `compactor: Compactor \| None = None` | compaction is optional and injected |
 | `build_system_prompt` (M5) | now takes a `PromptContext` instead of `(workspace, *, today, os_name)` | the prompt has many optional inputs now; one dataclass keeps the call readable (not part of §3.2) |
+| `Agent` (M6) | added keywords `router` and `max_parallel_tools`, and the method `add_usage(usage)` | routing and parallel reads; subagent usage counts toward the parent's budget |
+| `ToolRegistry` (M6) | added `subset(keep) -> ToolRegistry` | a read-only view of the toolbelt for `question` tasks and subagents |
+| Listener event order (M6) | for a run of parallel reads: all `on_tool_call` events first, then all `on_tool_result` events in call order | calls are announced before they start together. `RichListener` labels results that are not printed next to their call |
 
 ## Deviations from the spec
 

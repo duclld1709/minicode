@@ -16,6 +16,8 @@ cp .env.example .env      # then fill in your key and model IDs
 uv run minicode run "Fix the failing tests" --cwd examples/buggy_calculator
 git checkout -- examples/buggy_calculator   # reset the demo afterwards
 
+uv run minicode run "Fix the failing tests" --cwd examples/buggy_calculator --verify "pytest -q"
+uv run minicode commit-msg                  # diff -> summary -> commit message (2 chained calls)
 uv run minicode --cwd ./my-project          # interactive agent (REPL)
 uv run minicode chat                        # plain multi-turn chat, no tools
 uv run minicode mcp-serve --cwd .           # expose read-only file tools over MCP (stdio)
