@@ -59,6 +59,10 @@ uv run minicode --cwd DIR                 # M3: agent REPL
 uv run minicode mcp-serve --cwd DIR       # M4: MCP server over stdio (--allow-write for edits)
 uv run minicode run "task" --verify "pytest -q"   # M6: evaluator-optimizer loop
 uv run minicode commit-msg --cwd DIR      # M6: prompt chaining
+uv run minicode replay [TRACE]            # M7: view a trace (.minicode/traces/*.jsonl)
+uv run python evals/run_evals.py --model M [--label L] [--tasks a,b]   # M7: evals (costs money)
+uv run python evals/run_evals.py --compare evals/results/a.json evals/results/b.json
+# Eval check.py files must FAIL on the untouched fixture (tested) and judge behaviour, not form.
 # Run the buggy_calculator demo on a COPY (or git checkout it afterwards).
 uv run pytest -m m0                       # one milestone's tests
 uv run pytest --run-live -m live          # real API smoke tests

@@ -21,6 +21,8 @@ uv run minicode commit-msg                  # diff -> summary -> commit message 
 uv run minicode --cwd ./my-project          # interactive agent (REPL)
 uv run minicode chat                        # plain multi-turn chat, no tools
 uv run minicode mcp-serve --cwd .           # expose read-only file tools over MCP (stdio)
+uv run minicode replay                      # pretty-print the latest session trace
+uv run python evals/run_evals.py --model gpt-6.1-sol   # run the eval suite (9 tasks)
 uv run pytest                               # offline test suite
 ```
 

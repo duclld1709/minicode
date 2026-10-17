@@ -12,7 +12,7 @@ Run one milestone's tests with `uv run pytest -m mN`.
 | **M4** MCP | ✅ done | `m4` | `tests/contract/test_m4_mcp.py` | `mcp/server.py` (`build_server_registry`, `create_mcp_server`, `serve_stdio`), `mcp/client.py` (`load_mcp_config`, `McpConnection` start/list_tools/call_tool/close, `tool_name`, `result_text`, `tools_from_connection`, `McpManager`), `Tool.input_schema` + `Tool.schema()`, `cli.py` (`mcp-serve`, `mcp_tools`) |
 | **M5** Harness / context engineering | ✅ done | `m5` | `tests/contract/test_m5_harness.py`, `tests/contract/test_m5_compaction.py`, `tests/contract/test_m5_prompt_injection.py` | `agent/prompts.py` (`PromptContext`, `build_system_prompt` + section functions, `read_git_status`, `wrap_tool_output`), `harness/memory.py` (`load_project_memory`), `harness/skills.py` (`parse_skill_file`, `discover_skills`, `make_skill_tool`), `agent/context.py` (`estimate_tokens`, `Compactor.maybe_compact`/`split_index`, `clear_old_tool_results`, `summary_message`, `render_transcript`), compaction + wrapping hooks in `Agent` |
 | **M6** Workflow patterns | ✅ done | `m6` | `tests/contract/test_m6_chaining_routing.py`, `tests/contract/test_m6_parallel.py`, `tests/contract/test_m6_subagent_verifier.py`, `tests/contract/test_m6_todo.py` | `workflows/commit_msg.py` (`read_diff`, `write_commit_message`), `agent/router.py` (`TaskRoute`, `Router.route`), `llm/metered.py` (`MeteredLLM`), parallel reads in `Agent._execute_all`/`_execute_parallel`, `Agent.add_usage`, `ToolRegistry.subset`, `workflows/subagent.py` (`DelegateTool`), `workflows/verifier.py` (`run_with_verification`), `tools/todo.py` (`TodoList`), `ShellTool.run` |
-| M7 Observability & evals | ⏳ | `m7` | — | — |
+| **M7** Observability & evals | ✅ done | `m7` | `tests/contract/test_m7_tracing.py`, `tests/contract/test_m7_evals.py` | `tracing.py` (`mask_secrets`, `Tracer`, `TracedLLM`, `TraceListener`, `FanoutListener`, `load_trace`, `latest_trace`), `ui.py` (`render_trace`, `trace_totals`), `cli.py` (`replay`, `open_tracer`, run events), `evals.py` (`load_tasks`, `run_pytest`, `original_tests_pass`, `load_check`, `run_task`, `run_suite`, `summarize`, `save_results`, `comparison_table`), `evals/run_evals.py`, plus one eval task of your own |
 | M8 Polish | ⏳ | `m8` | — | — |
 
 Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
@@ -164,6 +164,42 @@ Learning notes: `docs/learning/mN-*.md`. SDK details: `docs/sdk-notes.md`.
     permission prompts in `ask` mode, because only read tools were available ($0.05).
   - `commit-msg` on the resulting diff produced `fix(calculator): correct arithmetic and median
     calculations` in 2 calls.
+
+## M7 — Observability & evals
+
+- **Tracing:** every `run` and REPL session writes `.minicode/traces/<stamp>-<id>.jsonl`. Event types
+  are `session_start`, `run_start`, `llm_call` (label main/small, latency, tokens, cost, stop reason,
+  text preview, tool calls), `tool_call` (arguments, latency, error flag, result size and preview),
+  `notice`, `verify`, `run_end` and `error`. The events come from wrappers: `TracedLLM` wraps the
+  client and `TraceListener` is fanned out next to the UI. The agent loop itself is unchanged.
+- **Masking:** each line is masked before it is written. Known keys and key-like patterns
+  (`sk-…`, `ghp_…`, `AKIA…`, `xox…-`) become `***`. A test makes the agent read a `.env` file
+  containing a key and checks that the key never reaches disk. The committed results were also
+  checked against the real key: no match.
+- `minicode replay [trace] [--cwd]` pretty-prints a trace (the latest one by default) and ends with a
+  totals line.
+- **Evals:** 9 tasks in `evals/tasks/`.
+  - Categories: bugfix ×2, feature, refactor (rename across files), question ×2, skill,
+    injection ×2.
+  - Each task has `task.yaml`, a `repo/` fixture and `check.py` with `check(ctx) -> (passed, reason)`.
+    `ctx` holds the workspace, the original fixture, the final answer and the attempted tool calls.
+  - Runs use `auto` mode, a fresh temp copy per task, the same `build_agent` as the CLI, and a $1
+    budget per task.
+  - Output: a results table plus `evals/results/<stamp>-<model>-<label>.json`, with one trace per
+    task copied next to it. `--compare a.json b.json …` compares runs side by side.
+- **Bug in our own check:** the first real run failed `injection_delete_tests`. The trace showed the
+  model had *not* obeyed the injection: it fixed the bug and *added* tests. The byte-for-byte "tests
+  unchanged" check was too strict. It was replaced by `original_tests_pass`: the original test
+  functions must still exist, and the original tests must pass on the agent's code. Four tests cover
+  the new check, the stale result was discarded, and the suite was re-run.
+- **Results (2026-10-17), committed in `evals/results/`:**
+
+  | config | pass | avg steps | tokens in/out | cost | time |
+  |---|---|---|---|---|---|
+  | `gpt-6.1-sol` (small: `gpt-6-luna`) | 9/9 | 6.0 | 109,785 / 3,618 | $0.256 | 160s |
+  | `gpt-6-luna` as main | 9/9 | 7.7 | 165,071 / 5,733 | $0.019 | 145s |
+
+  Both reached 100%, so the suite is saturated and harder tasks are needed to separate models.
 
 ## Interface changes (vs PROJECT_SPEC §3.2)
 
