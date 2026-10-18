@@ -375,3 +375,53 @@ Mỗi file gồm:
 3. tạo `CLAUDE.md` tóm tắt quy ước của dự án.
 
 Sau đó **chỉ thực hiện M0** rồi dừng lại.
+
+## 10. Mẫu bullet CV
+
+Bullet viết bằng tiếng Anh vì CV ngành tech thường dùng tiếng Anh. Số liệu lấy từ repo tại tag `m8`
+(283 test offline, coverage khoảng 95%, eval ngày 2026-10-17). Nếu chạy lại eval hoặc thêm test,
+nhớ cập nhật số.
+
+### 10.1 Bản đầy đủ (5–7 bullet, cho vị trí AI Engineer / LLM Engineer)
+
+**minicode — Claude Code–style coding agent from scratch** · Python, OpenAI & Anthropic APIs, MCP · [github link]
+
+- Built a terminal coding agent **without any agent framework** (no LangChain or Agent SDK). It is a
+  hand-written ~250-line agent loop with step, token, cost and wall-time budgets. Given a task in
+  plain English, it explores a repo, edits code and checks the fix by running the tests.
+- Designed a **provider-neutral `LLMClient` protocol** with streaming adapters for the OpenAI
+  Responses API and the Anthropic Messages API. Switching provider is one config change.
+- Implemented **layered safety**: a workspace sandbox enforced at the point of use,
+  `ask`/`accept-edits`/`auto` permission modes, a command denylist and untrusted-data wrapping of
+  tool output. A prompt-injection test checks that the guards hold even when the model is fooled.
+- Applied **agentic workflow patterns**: a small-model task router, parallel read tools,
+  orchestrator–worker subagents, an evaluator–optimizer loop (`--verify`) and prompt chaining. Added
+  two-stage context compaction, `AGENTS.md` project memory and on-demand skills.
+- Integrated **MCP in both directions**: the agent exposes its tools as an MCP server over stdio and
+  loads external MCP servers as tools.
+- Built **observability and evals**: masked JSONL traces with a replay viewer, and a 9-task eval suite
+  with objective checks. Benchmarking showed a small model reached the same 9/9 pass rate at
+  **13× lower cost** ($0.019 vs $0.256), using about 28% more steps.
+- Fully testable offline through dependency injection and a scripted fake LLM client:
+  **283 tests, ~95% coverage**, per-milestone contract tests and CI.
+
+### 10.2 Bản ngắn (3 bullet, khi CV hết chỗ)
+
+- Built a Claude Code–style coding agent in Python **from scratch, with no agent framework**. It has a
+  hand-written tool-use loop, OpenAI/Anthropic adapters behind one interface, file/bash tools and
+  MCP client + server.
+- Implemented production concerns: a workspace sandbox, permission modes and prompt-injection
+  defenses, cost/token budgets, context compaction and masked execution traces.
+- Created a 9-task eval harness. A small model matched the large one (9/9) at **13× lower cost**.
+  Kept 283 offline tests at ~95% coverage using a fake LLM client.
+
+### 10.3 Mẹo khi dùng
+
+- **Chọn bullet theo JD.** Vị trí AI/LLM thì nhấn vào workflow patterns, evals và MCP. Vị trí
+  backend thì nhấn vào thiết kế interface, DI, testing và safety.
+- **Đừng nói quá.** Đừng viết "production-ready" hay "secure sandbox": README đã ghi rõ `run_bash`
+  không phải sandbox thật, và eval suite nhỏ, đã bão hòa. Nhà tuyển dụng có thể hỏi những chỗ này khi
+  phỏng vấn. Cách nói trung thực và vẫn ghi điểm: "đo được trade-off cost/steps giữa các model".
+- **Luôn kèm link GitHub và demo GIF.** Với dự án tự làm, đó là bằng chứng mạnh nhất.
+- **Chuẩn bị câu chuyện cho từng bullet.** Ví dụ: vì sao không dùng framework, chặn prompt injection
+  thế nào, vì sao dùng exit code làm evaluator. Có thể tham khảo phần interview trong `docs/learning/m8-polish-cv.md`.
